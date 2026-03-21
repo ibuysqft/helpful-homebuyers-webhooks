@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: helpful-homebuyers-webhooks
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GHL_API_KEY
+        value: pit-db848c79-dc09-4ba7-aadf-7a21db5f30d1
+      - key: GHL_LOCATION_ID
+        value: Jy8irfJWPVtq3vycsvx4
+      - key: CALENDAR_ID
+        value: BqJ0rjqAFgh7VMJUvI5U
+      - key: APPT_DURATION_MIN
+        value: "30"
+    plan: free
+    region: oregon
