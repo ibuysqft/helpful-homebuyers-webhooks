@@ -1,12 +1,12 @@
 """
-Helpful Homebuyers — Webhook Server v2
-Replaces all N8N workflows. Handles all 4 Retell agents.
+Helpful Homebuyers — Webhook Server v3
+Handles all 4 Retell agents + full AI follow-up sequence system.
 
 Routes:
   POST /{agent}-check-calendar       (agent = shelby|alex|cole|jordan)
   POST /{agent}-book-appointment
   POST /{agent}-send-sms
-  POST /retell-call-outcome
+  POST /retell-call-outcome          ← full pipeline: stage + SMS + tags
   POST /retell-call-started          (optional — log call start)
   GET  /health
 """
@@ -60,6 +60,94 @@ STAGE_MAP = {
 URGENT_FLAGS = {"urgent_under_14_days", "critical_-_under_14_days"}
 
 VALID_AGENTS = {"shelby", "alex", "cole", "jordan"}
+
+# ── Retell agent_id → GHL outbound phone number ───────────────────────────────
+AGENT_PHONE_MAP = {
+    "agent_bde1f8ca91b3a63a42ecad9777": "+17036915670",  # Shelby inbound
+    "agent_40da2f733e42df807a89c669d6": "+17036915670",  # Shelby outbound
+    "agent_636dd8ac10f4b633ab38bb001e": "+17038402238",  # Alex bankruptcy
+    "agent_e6cafef912272207148d11893f": "+17038402238",  # Alex bankruptcy alt
+    "agent_56e1def11bd5201bcdc1fedd6b": "+12133720548",  # Cole acquisitions
+    "agent_dd0928ae5479516c905c55ca4d": "+12134747691",  # Jordan estate
+}
+
+# ── Outcome-based SMS templates (NEPQ/Hormozi style) ─────────────────────────
+# {name} = contact first name, {address} = property address
+SMS_TEMPLATES: dict[str, Optional[str]] = {
+    "Appointment Set": (
+        "Hey {name}! Shelby from Helpful Homebuyers. You're all set ✅ "
+        "We'll go over your options for {address} and put together a real cash number for you. "
+        "If anything changes, just reply here. Talk soon!"
+    ),
+    "Attorney Intro Agreed": (
+        "Hey {name}, Shelby from Helpful Homebuyers. "
+        "Really appreciate you chatting today. We'll get our attorney connected with yours — "
+        "we handle everything on our end. Any questions, just reply here."
+    ),
+    "Seeds Planted": (
+        "Hey {name}, Shelby from Helpful Homebuyers. "
+        "Quick question — what would getting a fair cash offer on {address} this week actually mean for your situation? "
+        "No repairs, no fees, we close on your timeline. Just reply and let me know."
+    ),
+    "Micro-Commitment": (
+        "Hey {name} — Shelby here. "
+        "Really glad we connected. We can move fast on {address} when you're ready. "
+        "What's one thing that would need to happen for this to make sense for you? Just reply."
+    ),
+    "Interested - Reviewing": (
+        "Hey {name}, this is Shelby from Helpful Homebuyers. "
+        "Take your time — we're not going anywhere. "
+        "When you're ready to talk numbers on {address}, just reply and I'll get a cash offer to you same day."
+    ),
+    "Call Back Later": (
+        "Hey {name}, Shelby from Helpful Homebuyers. No worries at all — "
+        "whenever the timing feels right, just reply here and we'll get moving. "
+        "We close fast and handle everything."
+    ),
+    "Not Ready": (
+        "Hey {name}, this is Shelby from Helpful Homebuyers. "
+        "Totally understand — no rush. When things change with {address}, "
+        "just reply and we'll be ready. We can close in as little as 7 days when you are."
+    ),
+    "Voicemail": (
+        "Hey {name}, this is Shelby from Helpful Homebuyers. "
+        "Left you a voicemail about {address}. We buy houses as-is for cash — no repairs, no fees. "
+        "When's a good time to connect? Just reply here."
+    ),
+    "No Answer": (
+        "Hey {name}, Shelby from Helpful Homebuyers here. "
+        "Tried reaching you today about {address}. "
+        "We buy homes as-is for cash and close fast. Is this still a good number? Reply YES."
+    ),
+    # Dead outcomes — no SMS
+    "Not Interested":         None,
+    "Disqualified":           None,
+    "DQ - Not Heir":          None,
+    "DQ - Already Sold":      None,
+    "DQ - Active Litigation": None,
+    "Wrong Number":           None,
+    "Disconnected":           None,
+}
+
+# ── GHL tags per outcome — trigger email drip workflows in GHL ────────────────
+OUTCOME_TAGS: dict[str, list[str]] = {
+    "Appointment Set":        ["ai-followup-appointment", "ai-hot-lead"],
+    "Attorney Intro Agreed":  ["ai-followup-appointment", "ai-hot-lead"],
+    "Seeds Planted":          ["ai-followup-hot", "ai-warm-lead"],
+    "Micro-Commitment":       ["ai-followup-hot", "ai-warm-lead"],
+    "Interested - Reviewing": ["ai-followup-hot", "ai-warm-lead"],
+    "Call Back Later":        ["ai-followup-callback"],
+    "Not Ready":              ["ai-followup-nurture"],
+    "Voicemail":              ["ai-followup-no-answer"],
+    "No Answer":              ["ai-followup-no-answer"],
+    "Not Interested":         ["ai-dead-not-interested"],
+    "Disqualified":           ["ai-dead-dq"],
+    "DQ - Not Heir":          ["ai-dead-dq"],
+    "DQ - Already Sold":      ["ai-dead-dq"],
+    "DQ - Active Litigation": ["ai-dead-dq"],
+    "Wrong Number":           ["ai-dead-dq"],
+    "Disconnected":           ["ai-dead-dq"],
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -159,6 +247,57 @@ def _update_stage(opp_id: str, pipeline_id: str, stage_name: str) -> bool:
     success = r is not None and r.status_code in (200, 201)
     if success:
         log.info("Opportunity %s → '%s'", opp_id, stage_name)
+    return success
+
+# ── Follow-up helpers ─────────────────────────────────────────────────────────
+
+def _get_contact_first_name(contact_id: str) -> str:
+    """Fetch contact first name from GHL for SMS personalization."""
+    r = _ghl_get(f"/contacts/{contact_id}")
+    if r and r.status_code == 200:
+        contact = r.json().get("contact", r.json())
+        return (contact.get("firstName") or contact.get("first_name") or "").strip() or "there"
+    return "there"
+
+def _send_followup_sms(contact_id: str, outcome: str, name: str, address: str, from_number: str) -> bool:
+    """Send outcome-based follow-up SMS via GHL immediately after call ends."""
+    template = SMS_TEMPLATES.get(outcome)
+    if not template:
+        log.info("No SMS template for outcome '%s' — skipping", outcome)
+        return False
+
+    first_name = name.split()[0] if name and name not in ("there", "") else "there"
+    address_display = address.strip() if address else "your property"
+    message = template.format(name=first_name, address=address_display)
+
+    payload: dict = {
+        "type": "SMS",
+        "contactId": contact_id,
+        "message": message,
+    }
+    if from_number:
+        payload["fromNumber"] = from_number
+
+    r = _ghl_post("/conversations/messages", json=payload)
+    success = r is not None and r.status_code in (200, 201)
+    if success:
+        log.info("Follow-up SMS sent → contact %s [outcome: %s]", contact_id, outcome)
+    else:
+        log.error("Follow-up SMS FAILED contact=%s status=%s body=%s",
+                  contact_id, r.status_code if r else "none", r.text[:200] if r else "")
+    return success
+
+def _apply_outcome_tags(contact_id: str, outcome: str) -> bool:
+    """Apply GHL tags based on outcome — triggers email drip workflows configured in GHL."""
+    tags = OUTCOME_TAGS.get(outcome, [])
+    if not tags:
+        return False
+    r = _ghl_post(f"/contacts/{contact_id}/tags", json={"tags": tags})
+    success = r is not None and r.status_code in (200, 201)
+    if success:
+        log.info("Tags applied to contact %s: %s", contact_id, tags)
+    else:
+        log.error("Tag apply failed contact=%s: %s", contact_id, r.text[:100] if r else "no response")
     return success
 
 # ── Startup ───────────────────────────────────────────────────────────────────
@@ -420,6 +559,16 @@ async def retell_call_outcome(request: Request):
             )
             log.info("Urgent escalation note added for contact %s", contact_id)
 
+    # ── Get contact name for SMS personalization ──────────────────────────────
+    contact_name = caller_name or _get_contact_first_name(contact_id)
+
+    # ── Apply outcome tags (triggers GHL email drip workflows) ────────────────
+    tags_applied = _apply_outcome_tags(contact_id, call_outcome)
+
+    # ── Send follow-up SMS immediately after call ends ────────────────────────
+    from_number = AGENT_PHONE_MAP.get(body.get("agent_id", ""), "")
+    sms_sent = _send_followup_sms(contact_id, call_outcome, contact_name, prop_address, from_number)
+
     return {
         "success":       True,
         "contact_id":    contact_id,
@@ -429,4 +578,6 @@ async def retell_call_outcome(request: Request):
         "note_added":    note_id is not None,
         "email_updated": bool(email_captured),
         "urgent":        is_urgent,
+        "sms_sent":      sms_sent,
+        "tags_applied":  tags_applied,
     }
