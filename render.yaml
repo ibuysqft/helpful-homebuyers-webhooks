@@ -13,5 +13,7 @@ services:
         value: BqJ0rjqAFgh7VMJUvI5U
       - key: APPT_DURATION_MIN
         value: "30"
+      - key: COMP_PULLER_URL
+        value: https://helpful-homebuyers-comp-puller.onrender.com
     plan: free
     region: oregon
