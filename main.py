@@ -154,6 +154,9 @@ log = logging.getLogger(__name__)
 
 app = FastAPI(title="Helpful Homebuyers Webhooks", version="2.0.0")
 
+from deal_updater import router as deal_router
+app.include_router(deal_router)
+
 # ── Pipeline stage cache ──────────────────────────────────────────────────────
 _pipeline_cache: dict = {}
 
