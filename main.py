@@ -27,6 +27,10 @@ GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 CALENDAR_ID     = os.getenv("CALENDAR_ID", "BqJ0rjqAFgh7VMJUvI5U")
 GHL_BASE        = "https://services.leadconnectorhq.com"
 
+# HHB On Market (Marcus)
+GHL_LOCATION_ID_ON_MARKET = "18Qc6ZWft7zdNY4oZUSm"
+MARCUS_AGENT_ID           = "agent_66939b0a2da6f2e37fe99edc54"
+
 # Appointment duration in minutes (real estate consultations = 30 min min)
 APPT_DURATION_MIN = int(os.getenv("APPT_DURATION_MIN", "30"))
 
@@ -48,6 +52,12 @@ STAGE_MAP = {
     "Voicemail":              "AI - No Answer",
     "No Answer":              "AI - No Answer",
     "Not Interested":         "Dead - Not Interested",
+    # MLS / Marcus outcomes
+    "interested_write_offer": "Offer Sent",
+    "in_escrow_backup":       "Contacted",
+    "not_interested":         "Dead",
+    "Interested - Write Offer": "Offer Sent",
+    "In Escrow - Backup":     "Contacted",
     "Disqualified":           "Dead - DQ",
     "DQ - Not Heir":          "Dead - DQ",
     "DQ - Already Sold":      "Dead - DQ",
@@ -59,7 +69,7 @@ STAGE_MAP = {
 # Flags/urgency values that trigger escalation
 URGENT_FLAGS = {"urgent_under_14_days", "critical_-_under_14_days"}
 
-VALID_AGENTS = {"shelby", "alex", "cole", "jordan"}
+VALID_AGENTS = {"shelby", "alex", "cole", "jordan", "marcus"}
 
 # ── Retell agent_id → GHL outbound phone number ───────────────────────────────
 AGENT_PHONE_MAP = {
@@ -69,6 +79,7 @@ AGENT_PHONE_MAP = {
     "agent_e6cafef912272207148d11893f": "+17038402238",  # Alex bankruptcy alt
     "agent_56e1def11bd5201bcdc1fedd6b": "+12133720548",  # Cole acquisitions
     "agent_dd0928ae5479516c905c55ca4d": "+12134747691",  # Jordan estate
+    MARCUS_AGENT_ID: os.getenv("MARCUS_PHONE", ""),      # Marcus MLS On Market (set MARCUS_PHONE env var)
 }
 
 # ── Outcome-based SMS templates (NEPQ/Hormozi style) ─────────────────────────
@@ -307,8 +318,16 @@ def _apply_outcome_tags(contact_id: str, outcome: str) -> bool:
 
 @app.on_event("startup")
 async def startup_event():
-    log.info("Helpful Homebuyers Webhook Server v2 starting")
+    log.info("Helpful Homebuyers Webhook Server v3 starting")
     _load_pipeline_cache()
+    from mls_tracks import start_scheduler
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    from mls_tracks import stop_scheduler
+    stop_scheduler()
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -572,15 +591,115 @@ async def retell_call_outcome(request: Request):
     from_number = AGENT_PHONE_MAP.get(body.get("agent_id", ""), "")
     sms_sent = _send_followup_sms(contact_id, call_outcome, contact_name, prop_address, from_number)
 
+    # ── MLS track dispatch (Marcus calls only) ────────────────────────────────
+    track_dispatched = None
+    agent_id = body.get("agent_id", "")
+    if agent_id == MARCUS_AGENT_ID:
+        from mls_tracks import dispatch_track
+        contact_phone = ""
+        contact_r = _ghl_get(f"/contacts/{contact_id}")
+        if contact_r and contact_r.status_code == 200:
+            contact_phone = (contact_r.json().get("contact", contact_r.json()) or {}).get("phone", "")
+        offer_data = {
+            "address": prop_address,
+            "offer_price": float(custom.get("offer_price", 0) or 0),
+            "arv": float(custom.get("arv", 0) or 0),
+            "repair_estimate": float(custom.get("repair_estimate", 0) or 0),
+            "list_price": float(custom.get("list_price", 0) or 0),
+            "days_on_market": custom.get("days_on_market", ""),
+            "agent_name": custom.get("listing_agent_name", ""),
+            "agent_phone": custom.get("listing_agent_phone", ""),
+            "comps": custom.get("comps", []),
+            "contact_name": contact_name,
+        }
+        track_dispatched = dispatch_track(
+            contact_id, call_outcome, contact_name, prop_address, contact_phone,
+            offer_data=offer_data if call_outcome in ("interested_write_offer", "Interested - Write Offer") else None,
+        )
+        if track_dispatched:
+            log.info("MLS Track %s dispatched for contact %s", track_dispatched, contact_id)
+
     return {
-        "success":       True,
-        "contact_id":    contact_id,
-        "outcome":       call_outcome,
-        "stage":         ghl_stage,
-        "stage_updated": stage_updated,
-        "note_added":    note_id is not None,
-        "email_updated": bool(email_captured),
-        "urgent":        is_urgent,
-        "sms_sent":      sms_sent,
-        "tags_applied":  tags_applied,
+        "success":          True,
+        "contact_id":       contact_id,
+        "outcome":          call_outcome,
+        "stage":            ghl_stage,
+        "stage_updated":    stage_updated,
+        "note_added":       note_id is not None,
+        "email_updated":    bool(email_captured),
+        "urgent":           is_urgent,
+        "sms_sent":         sms_sent,
+        "tags_applied":     tags_applied,
+        "mls_track":        track_dispatched,
     }
+
+
+# ── GHL inbound SMS webhook (Track B reply → instant Marcus call) ─────────────
+
+@app.post("/ghl-inbound-sms")
+async def ghl_inbound_sms(request: Request):
+    """
+    Called by GHL workflow when a contact sends an inbound SMS.
+    If the contact has the mls-track-b-backup tag, cancel the drip
+    and trigger an instant Marcus call.
+
+    GHL workflow setup:
+      Trigger: Customer Reply (SMS)
+      Action: Webhook POST https://<server>/ghl-inbound-sms
+      Body: { "contact_id": "{{contact.id}}", "message": "{{message.body}}" }
+    """
+    body = await request.json()
+    contact_id = body.get("contact_id", "")
+    message = body.get("message", "")
+
+    if not contact_id:
+        return JSONResponse({"error": "missing contact_id"}, status_code=400)
+
+    # Check if contact has Track B tag
+    contact_r = _ghl_get(f"/contacts/{contact_id}")
+    if not contact_r or contact_r.status_code != 200:
+        return JSONResponse({"handled": False, "reason": "contact not found"})
+
+    contact = contact_r.json().get("contact", contact_r.json()) or {}
+    tags = contact.get("tags", [])
+
+    if "mls-track-b-backup" not in tags:
+        log.debug("ghl-inbound-sms: contact %s not in Track B — ignoring", contact_id)
+        return JSONResponse({"handled": False, "reason": "not track B contact"})
+
+    from mls_tracks import handle_inbound_reply
+    triggered = handle_inbound_reply(contact_id, message)
+    log.info("Track B reply handler → contact=%s triggered=%s", contact_id, triggered)
+    return {"handled": True, "call_triggered": triggered}
+
+
+# ── Manual offer+comp email trigger ──────────────────────────────────────────────
+
+@app.post("/send-offer-comp-email")
+async def send_offer_comp_email_route(request: Request):
+    """
+    Manually trigger the Offer + Comp Package email for a contact.
+
+    Body:
+      {
+        "contact_id": "...",
+        "address": "123 Main St",
+        "offer_price": 285000,
+        "arv": 340000,
+        "repair_estimate": 25000,
+        "list_price": 320000,
+        "days_on_market": 47,
+        "agent_name": "...",
+        "agent_phone": "...",
+        "comps": [{"address":..., "sqft":..., "bed":..., "bath":...,
+                   "sale_price":..., "sold_date":..., "price_sqft":...}, ...]
+      }
+    """
+    body = await request.json()
+    contact_id = body.pop("contact_id", "")
+    if not contact_id:
+        return JSONResponse({"error": "missing contact_id"}, status_code=400)
+
+    from offer_comp_email import send_offer_comp_email
+    success = send_offer_comp_email(contact_id, GHL_HEADERS, body)
+    return {"success": success, "contact_id": contact_id}
