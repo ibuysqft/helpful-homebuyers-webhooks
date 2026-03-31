@@ -19,6 +19,7 @@ from typing import Optional
 
 import requests
 from fastapi import FastAPI, Request, HTTPException
+from offer_engine.analyze_deal import analyze_deal as _analyze_deal
 from fastapi.responses import JSONResponse
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -680,3 +681,24 @@ async def send_offer_comp_email_route(request: Request):
     from offer_comp_email import send_offer_comp_email
     success = send_offer_comp_email(contact_id, GHL_HEADERS, body)
     return {"success": success, "contact_id": contact_id}
+
+
+@app.post("/analyze")
+async def analyze_endpoint(request: Request):
+    """Trigger offer analysis for a property.
+
+    Body: { address, redfin_url, sqft, ghl_opportunity_id, persist }
+    """
+    body = await request.json()
+    address = body.get("address")
+    if not address:
+        return JSONResponse({"error": "address required"}, status_code=400)
+
+    result = _analyze_deal(
+        address=address,
+        redfin_url=body.get("redfin_url"),
+        sqft=body.get("sqft", 1200),
+        persist=body.get("persist", False),
+        ghl_opportunity_id=body.get("ghl_opportunity_id"),
+    )
+    return result
