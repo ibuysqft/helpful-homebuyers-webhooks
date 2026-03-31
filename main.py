@@ -41,30 +41,7 @@ GHL_HEADERS = {
 }
 
 # Map Retell call outcomes → GHL pipeline stage names
-STAGE_MAP = {
-    "Appointment Set":        "AI - Qualified (Appt Set)",
-    "Attorney Intro Agreed":  "AI - Qualified (Appt Set)",
-    "Seeds Planted":          "AI - Qualified (Seeds Planted)",
-    "Micro-Commitment":       "AI - Qualified (Seeds Planted)",
-    "Call Back Later":        "AI - Qualified (Seeds Planted)",
-    "Interested - Reviewing": "AI - Qualified (Seeds Planted)",
-    "Not Ready":              "AI - Qualified (Seeds Planted)",
-    "Voicemail":              "AI - No Answer",
-    "No Answer":              "AI - No Answer",
-    "Not Interested":         "Dead - Not Interested",
-    # MLS / Marcus outcomes
-    "interested_write_offer": "Offer Sent",
-    "in_escrow_backup":       "Contacted",
-    "not_interested":         "Dead",
-    "Interested - Write Offer": "Offer Sent",
-    "In Escrow - Backup":     "Contacted",
-    "Disqualified":           "Dead - DQ",
-    "DQ - Not Heir":          "Dead - DQ",
-    "DQ - Already Sold":      "Dead - DQ",
-    "DQ - Active Litigation": "Dead - DQ",
-    "Wrong Number":           "Dead - DQ",
-    "Disconnected":           "Dead - DQ",
-}
+from stage_map import STAGE_MAP
 
 # Flags/urgency values that trigger escalation
 URGENT_FLAGS = {"urgent_under_14_days", "critical_-_under_14_days"}
