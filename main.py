@@ -20,7 +20,8 @@ from typing import Optional
 import requests
 from fastapi import FastAPI, Request, HTTPException
 from offer_engine.analyze_deal import analyze_deal as _analyze_deal
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+import pathlib
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GHL_API_KEY     = os.getenv("GHL_API_KEY", "pit-db848c79-dc09-4ba7-aadf-7a21db5f30d1")
@@ -150,6 +151,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="Helpful Homebuyers Webhooks", version="2.0.0")
+
+_STATIC_DIR = pathlib.Path(__file__).parent
 
 from deal_updater import router as deal_router
 app.include_router(deal_router)
@@ -825,3 +828,67 @@ async def analyze_endpoint(request: Request):
         ghl_opportunity_id=body.get("ghl_opportunity_id"),
     )
     return result
+
+
+# ── Buyer opt-in form ─────────────────────────────────────────────────────────
+
+@app.get("/optin")
+async def buyer_optin_form():
+    """Serve the static buyer opt-in HTML form."""
+    form_path = _STATIC_DIR / "buyer_optin.html"
+    return FileResponse(form_path, media_type="text/html")
+
+
+@app.post("/buyer-optin")
+async def buyer_optin(request: Request):
+    """
+    Process buyer opt-in form submission. Writes directly to Supabase cash_buyers.
+
+    Body (JSON):
+      {
+        "first_name":       "Alice",
+        "last_name":        "Smith",
+        "email":            "alice@example.com",
+        "phone":            "+15550001111",
+        "company":          "Smith RE LLC",
+        "property_types":   ["multifamily", "retail"],
+        "price_range_min":  500000,
+        "price_range_max":  3000000,
+        "preferred_states": ["CA", "TX"]
+      }
+    """
+    body = await request.json()
+
+    email = (body.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return JSONResponse({"error": "valid email required"}, status_code=400)
+
+    phone = (body.get("phone") or "").strip()
+    if not phone:
+        return JSONResponse({"error": "phone required"}, status_code=400)
+
+    property_types = "|".join(body.get("property_types") or [])
+
+    record = {
+        "first_name":      (body.get("first_name") or "").strip(),
+        "last_name":       (body.get("last_name") or "").strip(),
+        "email":           email,
+        "phone":           phone,
+        "company":         (body.get("company") or "").strip(),
+        "price_range_min": float(body.get("price_range_min") or 0),
+        "price_range_max": float(body.get("price_range_max") or 0),
+        "preferred_states": body.get("preferred_states") or [],
+        "buy_criteria":    {"property_type": property_types},
+        "status":          "active",
+    }
+
+    from dispo_tracks import _get_sb
+    try:
+        sb = _get_sb()
+        sb.table("cash_buyers").upsert(record, on_conflict="email").execute()
+    except Exception as exc:
+        log.error("/buyer-optin Supabase write failed email=%s: %s", email, exc)
+        return JSONResponse({"error": "database error"}, status_code=500)
+
+    log.info("Buyer opt-in: %s (%s)", email, phone)
+    return {"success": True, "email": email}

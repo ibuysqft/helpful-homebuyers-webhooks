@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Buyer Opt-In — Helpful Homebuyers</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f0f11;
+      color: #e4e4e7;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+    .card {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 560px;
+    }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; }
+    p.sub { color: #a1a1aa; font-size: 0.9rem; margin-bottom: 2rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    label { display: block; font-size: 0.8rem; font-weight: 600; color: #a1a1aa; margin-bottom: 0.3rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    input, select { width: 100%; background: #09090b; border: 1px solid #27272a; border-radius: 6px; padding: 0.6rem 0.75rem; color: #e4e4e7; font-size: 0.95rem; margin-bottom: 1.25rem; }
+    input:focus, select:focus { outline: 2px solid #3b82f6; outline-offset: 1px; }
+    .group { margin-bottom: 1.25rem; }
+    .checkboxes { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; }
+    .checkboxes label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; text-transform: none; letter-spacing: 0; color: #e4e4e7; margin-bottom: 0; }
+    .checkboxes input[type=checkbox] { width: auto; margin-bottom: 0; }
+    .price-row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 0.5rem; }
+    .price-row span { color: #71717a; text-align: center; margin-bottom: 1.25rem; }
+    button[type=submit] {
+      width: 100%; background: #3b82f6; color: #fff;
+      border: none; border-radius: 8px; padding: 0.8rem;
+      font-size: 1rem; font-weight: 600; cursor: pointer;
+      margin-top: 0.5rem;
+    }
+    button[type=submit]:hover { background: #2563eb; }
+    #success { display: none; text-align: center; padding: 2rem; }
+    #success h2 { font-size: 1.25rem; margin-bottom: 0.5rem; }
+    #success p { color: #a1a1aa; }
+    .tcpa { font-size: 0.75rem; color: #71717a; margin-top: 1rem; line-height: 1.5; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div id="form-section">
+    <h1>Get First Look at Off-Market Deals</h1>
+    <p class="sub">Join our buyer network. We'll match you with deals that fit your exact criteria.</p>
+    <form id="optin-form">
+      <div class="row">
+        <div>
+          <label for="first_name">First Name</label>
+          <input type="text" id="first_name" name="first_name" required>
+        </div>
+        <div>
+          <label for="last_name">Last Name</label>
+          <input type="text" id="last_name" name="last_name" required>
+        </div>
+      </div>
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required>
+      <label for="phone">Phone</label>
+      <input type="tel" id="phone" name="phone" required placeholder="+1 (555) 000-0000">
+      <label for="company">Company (optional)</label>
+      <input type="text" id="company" name="company">
+      <div class="group">
+        <label>Property Types</label>
+        <div class="checkboxes">
+          <label><input type="checkbox" name="property_types" value="multifamily"> Multifamily</label>
+          <label><input type="checkbox" name="property_types" value="retail"> Retail</label>
+          <label><input type="checkbox" name="property_types" value="industrial"> Industrial</label>
+          <label><input type="checkbox" name="property_types" value="office"> Office</label>
+          <label><input type="checkbox" name="property_types" value="mixed-use"> Mixed-Use</label>
+        </div>
+      </div>
+      <label>Price Range</label>
+      <div class="price-row">
+        <input type="number" id="price_range_min" name="price_range_min" placeholder="Min ($)" required>
+        <span>–</span>
+        <input type="number" id="price_range_max" name="price_range_max" placeholder="Max ($)" required>
+      </div>
+      <label for="preferred_states">Preferred States</label>
+      <select id="preferred_states" name="preferred_states" multiple size="5" required>
+        <option value="AL">Alabama</option><option value="AZ">Arizona</option>
+        <option value="CA">California</option><option value="CO">Colorado</option>
+        <option value="FL">Florida</option><option value="GA">Georgia</option>
+        <option value="IL">Illinois</option><option value="NC">North Carolina</option>
+        <option value="NV">Nevada</option><option value="NY">New York</option>
+        <option value="OH">Ohio</option><option value="OR">Oregon</option>
+        <option value="PA">Pennsylvania</option><option value="SC">South Carolina</option>
+        <option value="TN">Tennessee</option><option value="TX">Texas</option>
+        <option value="VA">Virginia</option><option value="WA">Washington</option>
+      </select>
+      <p style="font-size:0.75rem;color:#71717a;margin-top:-1rem;margin-bottom:1.25rem">Hold Ctrl/Cmd to select multiple states</p>
+      <button type="submit">Join Buyer Network</button>
+      <p class="tcpa">By submitting, you consent to receive SMS and calls from Helpful Homebuyers about deals matching your criteria. Msg &amp; data rates may apply. Reply STOP to opt out. This call may be recorded.</p>
+    </form>
+  </div>
+  <div id="success">
+    <h2>You're on the list!</h2>
+    <p>We'll reach out as soon as we have a deal that fits your criteria.</p>
+  </div>
+</div>
+<script>
+document.getElementById("optin-form").addEventListener("submit", async function(e) {
+  e.preventDefault();
+  const form = e.target;
+  const types = Array.from(form.querySelectorAll('input[name="property_types"]:checked')).map(cb => cb.value);
+  const states = Array.from(form.querySelectorAll('#preferred_states option:checked')).map(o => o.value);
+  const payload = {
+    first_name:       form.first_name.value,
+    last_name:        form.last_name.value,
+    email:            form.email.value,
+    phone:            form.phone.value,
+    company:          form.company.value,
+    property_types:   types,
+    price_range_min:  parseFloat(form.price_range_min.value) || 0,
+    price_range_max:  parseFloat(form.price_range_max.value) || 0,
+    preferred_states: states,
+  };
+  const r = await fetch("/buyer-optin", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(payload),
+  });
+  if (r.ok) {
+    document.getElementById("form-section").style.display = "none";
+    document.getElementById("success").style.display = "block";
+  } else {
+    alert("Something went wrong. Please try again.");
+  }
+});
+</script>
+</body>
+</html>
