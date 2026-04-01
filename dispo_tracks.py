@@ -169,3 +169,227 @@ def match_buyers(deal_data: dict) -> list:
         ]
 
     return rows
+
+
+# ── GHL pipeline management ───────────────────────────────────────────────────
+
+def ensure_dispo_pipeline() -> str:
+    """
+    Return the Commercial Dispo pipeline ID.
+
+    Priority:
+      1. GHL_DISPO_PIPELINE_ID env var
+      2. Search GHL for existing pipeline named "Commercial Dispo"
+
+    Raises RuntimeError if neither exists (pipeline must be created manually in GHL).
+    """
+    global _dispo_pipeline_id
+    if _dispo_pipeline_id:
+        return _dispo_pipeline_id
+
+    r = _ghl_get("/opportunities/pipelines", params={"locationId": GHL_LOCATION_ID})
+    if not r or r.status_code != 200:
+        raise RuntimeError(
+            f"Could not fetch GHL pipelines (status {r.status_code if r else 'no response'})"
+        )
+
+    for pipeline in r.json().get("pipelines", []):
+        if pipeline.get("name", "").lower() == "commercial dispo":
+            _dispo_pipeline_id = pipeline["id"]
+            log.info("Found 'Commercial Dispo' pipeline: %s", _dispo_pipeline_id)
+            _populate_stage_cache(pipeline)
+            return _dispo_pipeline_id
+
+    raise RuntimeError(
+        "No 'Commercial Dispo' pipeline found in GHL and GHL_DISPO_PIPELINE_ID not set.\n"
+        "Create it in GHL with these stages: Blast Sent, Interest Confirmed, Jenni Qualifying, "
+        "Call Scheduled, LOI Submitted, Closed, Dead — then set GHL_DISPO_PIPELINE_ID in Render."
+    )
+
+
+def _populate_stage_cache(pipeline: dict) -> None:
+    for stage in pipeline.get("stages", []):
+        _dispo_stage_cache[stage["name"].lower()] = stage["id"]
+
+
+def _cached_stage_id(stage_name: str) -> Optional[str]:
+    """Return stage ID from cache, loading pipeline if needed."""
+    if not _dispo_stage_cache:
+        pipeline_id = ensure_dispo_pipeline()
+        if not _dispo_stage_cache:
+            # Cache not populated by ensure_dispo_pipeline — load separately
+            r = _ghl_get("/opportunities/pipelines", params={"locationId": GHL_LOCATION_ID})
+            if r and r.status_code == 200:
+                for p in r.json().get("pipelines", []):
+                    if p["id"] == pipeline_id:
+                        _populate_stage_cache(p)
+                        break
+    return _dispo_stage_cache.get(stage_name.lower())
+
+
+# ── GHL contact helpers ────────────────────────────────────────────────────────
+
+def find_or_create_ghl_contact(buyer: dict) -> Optional[str]:
+    """
+    Find a GHL contact by phone. Create one if not found.
+    Returns GHL contact_id or None on failure.
+    """
+    phone = (buyer.get("phone") or "").strip()
+    if not phone:
+        log.warning("Buyer %s has no phone — cannot create GHL contact", buyer.get("id"))
+        return None
+
+    # Search by phone (duplicate check endpoint)
+    r = _ghl_get(
+        "/contacts/search/duplicate",
+        params={"locationId": GHL_LOCATION_ID, "phone": phone},
+    )
+    if r and r.status_code == 200:
+        contact = r.json().get("contact")
+        if contact:
+            return contact.get("id")
+
+    # Create new contact
+    payload = {
+        "locationId":  GHL_LOCATION_ID,
+        "firstName":   buyer.get("first_name", ""),
+        "lastName":    buyer.get("last_name", ""),
+        "phone":       phone,
+        "email":       buyer.get("email", ""),
+        "companyName": buyer.get("company", ""),
+        "tags":        ["cash-buyer", "dispo-blast"],
+    }
+    r = _ghl_post("/contacts/", json=payload)
+    if r and r.status_code in (200, 201):
+        data = r.json()
+        contact_id = (data.get("contact") or {}).get("id") or data.get("id")
+        log.info("Created GHL contact for buyer %s: %s", buyer.get("id"), contact_id)
+        return contact_id
+
+    log.error(
+        "Failed to create GHL contact for buyer %s: %s",
+        buyer.get("id"),
+        r.text[:200] if r else "no response",
+    )
+    return None
+
+
+def _add_note(contact_id: str, note: str) -> None:
+    r = _ghl_post(f"/contacts/{contact_id}/notes", json={"body": note, "userId": ""})
+    if not (r and r.status_code in (200, 201)):
+        log.error("Note failed for contact %s: %s", contact_id, r.text[:200] if r else "no response")
+
+
+def _send_sms(contact_id: str, message: str) -> bool:
+    """Send SMS from JENNI_PHONE to a GHL contact."""
+    payload = {
+        "type":      "SMS",
+        "contactId": contact_id,
+        "message":   message,
+    }
+    if JENNI_PHONE:
+        payload["fromNumber"] = JENNI_PHONE
+    r = _ghl_post("/conversations/messages", json=payload)
+    return r is not None and r.status_code in (200, 201)
+
+
+# ── GHL opportunity helpers ────────────────────────────────────────────────────
+
+def create_dispo_opp(contact_id: str, deal_id: str, deal_data: dict) -> Optional[str]:
+    """Create a GHL opportunity in the Commercial Dispo pipeline at 'Blast Sent'."""
+    pipeline_id = ensure_dispo_pipeline()
+    stage_id = _cached_stage_id("blast sent")
+    if not stage_id:
+        log.error("'Blast Sent' stage not found in dispo pipeline")
+        return None
+
+    payload = {
+        "pipelineId":      pipeline_id,
+        "pipelineStageId": stage_id,
+        "locationId":      GHL_LOCATION_ID,
+        "contactId":       contact_id,
+        "name":            f"Dispo — {deal_data.get('address', deal_id)}",
+        "monetaryValue":   deal_data.get("asking_price", 0),
+        "status":          "open",
+    }
+    r = _ghl_post("/opportunities/", json=payload)
+    if r and r.status_code in (200, 201):
+        data = r.json()
+        opp_id = (data.get("opportunity") or {}).get("id") or data.get("id")
+        log.info("Created dispo opp %s (contact=%s deal=%s)", opp_id, contact_id, deal_id)
+        return opp_id
+
+    log.error("Failed to create dispo opp: %s", r.text[:200] if r else "no response")
+    return None
+
+
+def advance_dispo_opp(opp_id: str, stage_name: str) -> bool:
+    """Move a dispo opportunity to the given stage."""
+    stage_id = _cached_stage_id(stage_name)
+    if not stage_id:
+        log.error("Stage '%s' not found in dispo pipeline", stage_name)
+        return False
+    r = _ghl_put(f"/opportunities/{opp_id}", json={"pipelineStageId": stage_id})
+    return r is not None and r.status_code in (200, 201)
+
+
+def find_dispo_opp(contact_id: str, stage_name: Optional[str] = None) -> Optional[str]:
+    """
+    Find the most recent dispo opportunity for a contact.
+    If stage_name is given, only return opps in that stage.
+    Returns the GHL opportunity ID or None.
+    """
+    pipeline_id = ensure_dispo_pipeline()
+    r = _ghl_get(
+        "/opportunities/search",
+        params={
+            "location_id": GHL_LOCATION_ID,
+            "contact_id":  contact_id,
+            "pipeline_id": pipeline_id,
+        },
+    )
+    if not r or r.status_code != 200:
+        return None
+
+    opps = r.json().get("opportunities", [])
+    if not opps:
+        return None
+
+    if stage_name:
+        target_stage_id = _cached_stage_id(stage_name)
+        opps = [o for o in opps if o.get("pipelineStageId") == target_stage_id]
+
+    return opps[0]["id"] if opps else None
+
+
+# ── Deal data fetcher ─────────────────────────────────────────────────────────
+
+def get_deal_data(opp_id: str) -> dict:
+    """
+    Fetch deal details from a GHL opportunity.
+    Custom field IDs used: city, state, property_type, cap_rate, noi, unit_count.
+    Falls back to empty strings for missing fields.
+    """
+    r = _ghl_get(f"/opportunities/{opp_id}")
+    if not r or r.status_code != 200:
+        log.warning("Could not fetch deal data for opp %s", opp_id)
+        return {}
+
+    opp = r.json().get("opportunity", r.json()) or {}
+    cf = {
+        (f.get("fieldKey") or f.get("id") or ""): f.get("fieldValue")
+        for f in opp.get("customFields", [])
+    }
+
+    asking = float(opp.get("monetaryValue") or 0)
+    return {
+        "address":              opp.get("name", ""),
+        "city":                 cf.get("city", ""),
+        "state":                cf.get("state", ""),
+        "asking_price":         asking,
+        "asking_price_formatted": _fmt_price(asking),
+        "property_type":        cf.get("property_type", "commercial property"),
+        "cap_rate":             cf.get("cap_rate", "not listed"),
+        "noi":                  cf.get("noi", "not listed"),
+        "unit_count":           cf.get("unit_count", "N/A"),
+    }
