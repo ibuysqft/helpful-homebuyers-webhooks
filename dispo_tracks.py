@@ -130,3 +130,42 @@ def _fmt_price(price: float) -> str:
     if price >= 1_000:
         return f"${price / 1_000:.0f}K"
     return f"${price:.0f}"
+
+
+# ── Buyer matching ─────────────────────────────────────────────────────────────
+
+def match_buyers(deal_data: dict) -> list:
+    """
+    Query Supabase cash_buyers for active buyers whose criteria match the deal.
+
+    Matching rules:
+      - status = 'active'
+      - price_range_min <= asking_price <= price_range_max
+      - state in preferred_states
+      - property_type substring match in buy_criteria->property_type (if provided)
+    """
+    sb = _get_sb()
+    asking_price = float(deal_data.get("asking_price") or 0)
+    state = (deal_data.get("state") or "").strip()
+    property_type = (deal_data.get("property_type") or "").strip()
+
+    rows = (
+        sb.table("cash_buyers")
+        .select("*")
+        .eq("status", "active")
+        .lte("price_range_min", asking_price)
+        .gte("price_range_max", asking_price)
+        .contains("preferred_states", [state])
+        .execute()
+        .data
+    )
+
+    if property_type:
+        rows = [
+            r for r in rows
+            if property_type.lower() in (
+                ((r.get("buy_criteria") or {}).get("property_type") or "").lower()
+            )
+        ]
+
+    return rows

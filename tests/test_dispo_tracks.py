@@ -70,5 +70,87 @@ class TestFormatPrice(unittest.TestCase):
         self.assertEqual(dispo_tracks._fmt_price(500), "$500")
 
 
+class TestMatchBuyers(unittest.TestCase):
+    def _make_buyer(self, **overrides):
+        base = {
+            "id": "buyer-uuid-1",
+            "first_name": "Alice",
+            "last_name": "Smith",
+            "phone": "+15550001111",
+            "email": "alice@example.com",
+            "status": "active",
+            "price_range_min": 500_000,
+            "price_range_max": 3_000_000,
+            "preferred_states": ["CA"],
+            "buy_criteria": {"property_type": "multifamily|retail"},
+            "notes": "",
+        }
+        base.update(overrides)
+        return base
+
+    @patch("dispo_tracks._get_sb")
+    def test_returns_matching_buyers(self, mock_get_sb):
+        alice = self._make_buyer()
+        mock_sb = MagicMock()
+        mock_get_sb.return_value = mock_sb
+        (mock_sb.table.return_value
+            .select.return_value
+            .eq.return_value
+            .lte.return_value
+            .gte.return_value
+            .contains.return_value
+            .execute.return_value
+            .data) = [alice]
+
+        deal = {
+            "asking_price": 1_200_000,
+            "state": "CA",
+            "property_type": "multifamily",
+        }
+        result = dispo_tracks.match_buyers(deal)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["first_name"], "Alice")
+
+    @patch("dispo_tracks._get_sb")
+    def test_filters_by_property_type(self, mock_get_sb):
+        alice = self._make_buyer()
+        mock_sb = MagicMock()
+        mock_get_sb.return_value = mock_sb
+        (mock_sb.table.return_value
+            .select.return_value
+            .eq.return_value
+            .lte.return_value
+            .gte.return_value
+            .contains.return_value
+            .execute.return_value
+            .data) = [alice]
+
+        deal = {
+            "asking_price": 1_200_000,
+            "state": "CA",
+            "property_type": "industrial",
+        }
+        result = dispo_tracks.match_buyers(deal)
+        self.assertEqual(result, [])
+
+    @patch("dispo_tracks._get_sb")
+    def test_empty_property_type_skips_filter(self, mock_get_sb):
+        alice = self._make_buyer()
+        mock_sb = MagicMock()
+        mock_get_sb.return_value = mock_sb
+        (mock_sb.table.return_value
+            .select.return_value
+            .eq.return_value
+            .lte.return_value
+            .gte.return_value
+            .contains.return_value
+            .execute.return_value
+            .data) = [alice]
+
+        deal = {"asking_price": 1_200_000, "state": "CA", "property_type": ""}
+        result = dispo_tracks.match_buyers(deal)
+        self.assertEqual(len(result), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
