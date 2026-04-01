@@ -226,5 +226,56 @@ class TestBlastBuyers(unittest.TestCase):
         mock_note.assert_called_once()
 
 
+class TestHandleDispoReply(unittest.TestCase):
+    @patch("dispo_tracks._get_sb")
+    @patch("dispo_tracks.advance_dispo_opp", return_value=True)
+    @patch("dispo_tracks.find_dispo_opp", return_value="opp-123")
+    @patch("dispo_tracks._ghl_get")
+    @patch("dispo_tracks.get_deal_data", return_value={"address": "123 Main", "asking_price": 1_000_000, "property_type": "multifamily", "cap_rate": "6%", "noi": "$60K", "unit_count": "8"})
+    def test_negative_reply_closes_opp(self, mock_deal, mock_ghl, mock_find, mock_advance, mock_sb):
+        mock_sb.return_value = MagicMock()
+        mock_ghl.return_value = MagicMock(status_code=200, json=lambda: {"contact": {"phone": "+15550001111", "firstName": "Bob"}})
+
+        with patch("dispo_tracks.trigger_jenni_call", return_value=False) as mock_call:
+            result = dispo_tracks.handle_dispo_reply("contact-1", "no", "deal-1")
+
+        self.assertEqual(result["sentiment"], "negative")
+        self.assertEqual(result["action"], "opp_closed")
+        mock_call.assert_not_called()
+        mock_advance.assert_called_with("opp-123", "Dead")
+
+    @patch("dispo_tracks._get_sb")
+    @patch("dispo_tracks.advance_dispo_opp", return_value=True)
+    @patch("dispo_tracks.find_dispo_opp", return_value="opp-123")
+    @patch("dispo_tracks._ghl_get")
+    @patch("dispo_tracks.get_deal_data", return_value={"address": "123 Main", "asking_price": 1_000_000, "property_type": "multifamily", "cap_rate": "6%", "noi": "$60K", "unit_count": "8"})
+    def test_positive_reply_triggers_call(self, mock_deal, mock_ghl, mock_find, mock_advance, mock_sb):
+        mock_sb.return_value = MagicMock()
+        mock_ghl.return_value = MagicMock(status_code=200, json=lambda: {"contact": {"phone": "+15550001111", "firstName": "Bob"}})
+
+        with patch("dispo_tracks.trigger_jenni_call", return_value=True) as mock_call:
+            result = dispo_tracks.handle_dispo_reply("contact-1", "YES I'm interested", "deal-1")
+
+        self.assertEqual(result["sentiment"], "positive")
+        self.assertEqual(result["action"], "call_triggered")
+        self.assertTrue(result["call_ok"])
+        mock_call.assert_called_once()
+
+    @patch("dispo_tracks._get_sb")
+    @patch("dispo_tracks.advance_dispo_opp", return_value=True)
+    @patch("dispo_tracks.find_dispo_opp", return_value="opp-123")
+    @patch("dispo_tracks._ghl_get")
+    @patch("dispo_tracks.get_deal_data", return_value={"address": "123 Main", "asking_price": 1_000_000, "property_type": "multifamily", "cap_rate": "6%", "noi": "$60K", "unit_count": "8"})
+    def test_unclear_reply_triggers_call(self, mock_deal, mock_ghl, mock_find, mock_advance, mock_sb):
+        mock_sb.return_value = MagicMock()
+        mock_ghl.return_value = MagicMock(status_code=200, json=lambda: {"contact": {"phone": "+15550001111", "firstName": "Bob"}})
+
+        with patch("dispo_tracks.trigger_jenni_call", return_value=True) as mock_call:
+            result = dispo_tracks.handle_dispo_reply("contact-1", "what's the address?", "deal-1")
+
+        self.assertEqual(result["sentiment"], "unclear")
+        mock_call.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

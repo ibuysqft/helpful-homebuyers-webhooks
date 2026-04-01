@@ -515,3 +515,168 @@ def match_and_blast(deal_id: str, deal_data: dict, deal_contact_id: str) -> dict
         f"📤 Dispo blast complete — {blasted}/{len(buyers)} buyers contacted for deal {deal_id}.",
     )
     return {"matched": len(buyers), "blasted": blasted}
+
+
+# ── Inbound reply handler ─────────────────────────────────────────────────────
+
+# Module-level reference — allows tests to patch dispo_tracks.trigger_jenni_call
+trigger_jenni_call = None
+
+
+def _get_trigger_jenni_call():
+    """Lazy import so dispo_tracks doesn't circularly depend on jenni_tracks at import time."""
+    global trigger_jenni_call
+    if trigger_jenni_call is None:
+        from jenni_tracks import trigger_jenni_call as _fn
+        trigger_jenni_call = _fn
+    return trigger_jenni_call
+
+
+def handle_dispo_reply(contact_id: str, message: str, deal_id: str) -> dict:
+    """
+    Handle a buyer's SMS reply to a dispo blast.
+
+    Steps:
+      1. Classify reply sentiment
+      2. Find the buyer's dispo opportunity
+      3. Update dispo_blasts with the response
+      4. Negative → advance opp to Dead
+      5. Positive/unclear → advance opp to Interest Confirmed → Jenni Qualifying,
+         then trigger a Jenni outbound call
+    """
+    sentiment = classify_reply(message)
+    opp_id = find_dispo_opp(contact_id)
+    deal_data = get_deal_data(deal_id)
+
+    # Record response in dispo_blasts
+    try:
+        sb = _get_sb()
+        sb.table("dispo_blasts").update({
+            "response":    message,
+            "outcome":     sentiment,
+        }).eq("deal_opportunity_id", deal_id).eq("ghl_contact_id", contact_id).execute()
+    except Exception as exc:
+        log.warning("Could not update dispo_blasts response contact=%s deal=%s: %s", contact_id, deal_id, exc)
+
+    if sentiment == "negative":
+        if opp_id:
+            advance_dispo_opp(opp_id, "Dead")
+        return {"sentiment": "negative", "action": "opp_closed"}
+
+    # Positive or unclear — advance and call
+    if opp_id:
+        advance_dispo_opp(opp_id, "Interest Confirmed")
+        advance_dispo_opp(opp_id, "Jenni Qualifying")
+
+    # Fetch buyer phone from GHL contact
+    contact_r = _ghl_get(f"/contacts/{contact_id}")
+    buyer_phone = ""
+    buyer_name = "there"
+    if contact_r and contact_r.status_code == 200:
+        c = contact_r.json().get("contact", contact_r.json()) or {}
+        buyer_phone = c.get("phone", "")
+        buyer_name = c.get("firstName", "there")
+
+    _call_fn = _get_trigger_jenni_call()
+    call_ok = _call_fn(
+        contact_id    = contact_id,
+        broker_name   = buyer_name,
+        address       = deal_data.get("address", ""),
+        to_number     = buyer_phone,
+        asking_price  = str(deal_data.get("asking_price", "")),
+        property_type = deal_data.get("property_type", ""),
+        cap_rate      = deal_data.get("cap_rate", "not listed"),
+        noi           = deal_data.get("noi", "not listed"),
+        unit_count    = deal_data.get("unit_count", "N/A"),
+        context_note  = "dispo_call — buyer replied to blast",
+    )
+
+    return {"sentiment": sentiment, "action": "call_triggered", "call_ok": call_ok}
+
+
+# ── Post-qualification booking ────────────────────────────────────────────────
+
+def handle_buyer_qualified(contact_id: str) -> dict:
+    """
+    Called after Retell reports buyer_qualified for a Jenni dispo call.
+
+    Steps:
+      1. Find dispo opp in 'Jenni Qualifying' stage
+      2. Book next available slot on Commercial Deals calendar
+      3. Advance opp to 'Call Scheduled'
+    """
+    opp_id = find_dispo_opp(contact_id, stage_name="Jenni Qualifying")
+    appt_id = _book_next_available_slot(contact_id)
+
+    if opp_id:
+        advance_dispo_opp(opp_id, "Call Scheduled")
+        log.info("Dispo opp %s advanced to Call Scheduled (contact=%s)", opp_id, contact_id)
+    else:
+        log.warning("handle_buyer_qualified: no Jenni Qualifying opp found for %s", contact_id)
+
+    return {"opp_id": opp_id, "appt_id": appt_id, "booked": appt_id is not None}
+
+
+def _book_next_available_slot(contact_id: str) -> Optional[str]:
+    """
+    Find the first available slot on COMMERCIAL_DEALS_CALENDAR_ID tomorrow and book it.
+    Returns the GHL appointment ID or None on failure.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+    date_str = tomorrow.strftime("%Y-%m-%d")
+    day_start_ms = int(datetime(tomorrow.year, tomorrow.month, tomorrow.day, 0, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    day_end_ms   = int(datetime(tomorrow.year, tomorrow.month, tomorrow.day, 23, 59, 59, tzinfo=timezone.utc).timestamp() * 1000)
+
+    r = _ghl_post(
+        f"/calendars/{COMMERCIAL_DEALS_CALENDAR_ID}/free-slots",
+        json={
+            "startDate": day_start_ms,
+            "endDate":   day_end_ms,
+            "timezone":  "America/Los_Angeles",
+        },
+    )
+    if not r or r.status_code != 200:
+        log.warning("Could not fetch free slots for Commercial Deals calendar")
+        return None
+
+    # Find first available slot
+    slot_ms = None
+    for _date, day_data in (r.json().get("_dates_") or {}).items():
+        if isinstance(day_data, list):
+            for group in day_data:
+                slots = group.get("slots") or []
+                if slots:
+                    slot_ms = slots[0]
+                    break
+        if slot_ms:
+            break
+
+    if not slot_ms:
+        log.warning("No free slots found on Commercial Deals calendar for %s", date_str)
+        return None
+
+    start_dt = datetime.fromtimestamp(slot_ms / 1000, tz=timezone.utc)
+    end_dt   = start_dt + timedelta(minutes=APPT_DURATION_MIN)
+
+    payload = {
+        "calendarId":        COMMERCIAL_DEALS_CALENDAR_ID,
+        "locationId":        GHL_LOCATION_ID,
+        "contactId":         contact_id,
+        "startTime":         start_dt.isoformat(),
+        "endTime":           end_dt.isoformat(),
+        "title":             "Commercial Deal Review — Qualified Buyer",
+        "appointmentStatus": "new",
+        "ignoreDateRange":   False,
+        "toNotify":          True,
+    }
+    r2 = _ghl_post("/calendars/events/appointments", json=payload)
+    if r2 and r2.status_code in (200, 201):
+        appt = r2.json().get("appointment", r2.json())
+        appt_id = appt.get("id")
+        log.info("Booked Commercial Deals appt %s for contact %s", appt_id, contact_id)
+        return appt_id
+
+    log.error("Failed to book Commercial Deals appt: %s", r2.text[:200] if r2 else "no response")
+    return None
