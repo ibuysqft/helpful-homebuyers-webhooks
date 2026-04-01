@@ -152,5 +152,79 @@ class TestMatchBuyers(unittest.TestCase):
         self.assertEqual(len(result), 1)
 
 
+class TestBlastBuyers(unittest.TestCase):
+    def _make_buyer(self, buyer_id="buyer-uuid-1"):
+        return {
+            "id": buyer_id,
+            "first_name": "Bob",
+            "last_name": "Jones",
+            "phone": "+15550002222",
+            "email": "bob@example.com",
+            "buy_criteria": {"property_type": "multifamily"},
+        }
+
+    def _make_deal(self):
+        return {
+            "address": "123 Main St",
+            "city": "Fresno",
+            "state": "CA",
+            "asking_price": 1_500_000,
+            "asking_price_formatted": "$1.5M",
+            "property_type": "multifamily",
+            "cap_rate": "6.5%",
+            "noi": "$97,500",
+            "unit_count": "12",
+        }
+
+    @patch("dispo_tracks.create_dispo_opp", return_value="opp-abc")
+    @patch("dispo_tracks._send_sms", return_value=True)
+    @patch("dispo_tracks.find_or_create_ghl_contact", return_value="contact-123")
+    @patch("dispo_tracks._get_sb")
+    def test_blasts_new_buyer(self, mock_sb, mock_contact, mock_sms, mock_opp):
+        """New buyer (no existing dispo_blasts row) should be blasted."""
+        mock_supabase = MagicMock()
+        mock_sb.return_value = mock_supabase
+        # No existing blast row
+        (mock_supabase.table.return_value
+            .select.return_value.eq.return_value.eq.return_value
+            .execute.return_value.data) = []
+        # insert succeeds
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
+
+        count = dispo_tracks.blast_buyers("deal-1", self._make_deal(), [self._make_buyer()])
+
+        self.assertEqual(count, 1)
+        mock_sms.assert_called_once()
+        mock_opp.assert_called_once()
+
+    @patch("dispo_tracks._get_sb")
+    def test_skips_already_blasted_buyer(self, mock_sb):
+        """Buyer already in dispo_blasts for this deal should be skipped."""
+        mock_supabase = MagicMock()
+        mock_sb.return_value = mock_supabase
+        # Existing blast row present
+        (mock_supabase.table.return_value
+            .select.return_value.eq.return_value.eq.return_value
+            .execute.return_value.data) = [{"id": "existing"}]
+
+        count = dispo_tracks.blast_buyers("deal-1", self._make_deal(), [self._make_buyer()])
+        self.assertEqual(count, 0)
+
+    @patch("dispo_tracks.blast_buyers", return_value=2)
+    @patch("dispo_tracks.match_buyers", return_value=[{"id": "b1"}, {"id": "b2"}])
+    @patch("dispo_tracks._add_note")
+    def test_match_and_blast_returns_summary(self, mock_note, mock_match, mock_blast):
+        result = dispo_tracks.match_and_blast("deal-1", {"asking_price": 1_000_000}, "contact-x")
+        self.assertEqual(result["matched"], 2)
+        self.assertEqual(result["blasted"], 2)
+
+    @patch("dispo_tracks.match_buyers", return_value=[])
+    @patch("dispo_tracks._add_note")
+    def test_match_and_blast_no_buyers_adds_note(self, mock_note, mock_match):
+        result = dispo_tracks.match_and_blast("deal-1", {}, "contact-x")
+        self.assertEqual(result["matched"], 0)
+        mock_note.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

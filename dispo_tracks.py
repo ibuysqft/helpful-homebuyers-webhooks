@@ -393,3 +393,125 @@ def get_deal_data(opp_id: str) -> dict:
         "noi":                  cf.get("noi", "not listed"),
         "unit_count":           cf.get("unit_count", "N/A"),
     }
+
+
+# ── SMS blast ─────────────────────────────────────────────────────────────────
+
+def _format_blast_sms(buyer: dict, deal_data: dict) -> str:
+    return BLAST_SMS_TEMPLATE.format(
+        first_name    = buyer.get("first_name") or "there",
+        property_type = deal_data.get("property_type") or "commercial property",
+        city          = deal_data.get("city") or "",
+        state         = deal_data.get("state") or "",
+        unit_count    = deal_data.get("unit_count") or "N/A",
+        cap_rate      = deal_data.get("cap_rate") or "not listed",
+        asking_price  = deal_data.get("asking_price_formatted") or str(deal_data.get("asking_price", "")),
+    )
+
+
+def blast_buyers(deal_id: str, deal_data: dict, buyers: list) -> int:
+    """
+    Blast matched buyers with SMS and create GHL dispo opps.
+
+    For each buyer:
+      1. Idempotency check — skip if dispo_blasts row exists for (deal_id, buyer_id)
+      2. Find or create GHL contact
+      3. Send blast SMS (retry once on failure)
+      4. Create GHL dispo opp at "Blast Sent"
+      5. Insert dispo_blasts row
+
+    Returns count of buyers successfully blasted.
+    """
+    sb = _get_sb()
+    blasted = 0
+
+    for buyer in buyers:
+        buyer_id = str(buyer["id"])
+
+        # Idempotency check
+        existing = (
+            sb.table("dispo_blasts")
+            .select("id")
+            .eq("deal_opportunity_id", deal_id)
+            .eq("buyer_id", buyer_id)
+            .execute()
+            .data
+        )
+        if existing:
+            log.debug("Already blasted buyer %s on deal %s — skipping", buyer_id, deal_id)
+            continue
+
+        contact_id = find_or_create_ghl_contact(buyer)
+        if not contact_id:
+            log.warning("No GHL contact for buyer %s — skipping blast", buyer_id)
+            continue
+
+        sms_text = _format_blast_sms(buyer, deal_data)
+        sms_ok = _send_sms(contact_id, sms_text) or _send_sms(contact_id, sms_text)  # retry once
+
+        if not sms_ok:
+            log.error(
+                "SMS blast failed for buyer %s (contact %s) deal %s",
+                buyer_id, contact_id, deal_id,
+            )
+            # Still create opp to track the attempt
+            opp_id = create_dispo_opp(contact_id, deal_id, deal_data)
+            if opp_id:
+                advance_dispo_opp(opp_id, "Blast Sent")
+            continue
+
+        opp_id = create_dispo_opp(contact_id, deal_id, deal_data)
+
+        try:
+            sb.table("dispo_blasts").insert({
+                "deal_opportunity_id": deal_id,
+                "buyer_id":            buyer_id,
+                "ghl_contact_id":      contact_id,
+                "ghl_opp_id":          opp_id,
+            }).execute()
+        except Exception as exc:
+            log.error(
+                "dispo_blasts insert failed buyer=%s deal=%s: %s",
+                buyer_id, deal_id, exc,
+            )
+
+        blasted += 1
+
+    return blasted
+
+
+def match_and_blast(deal_id: str, deal_data: dict, deal_contact_id: str) -> dict:
+    """
+    Full match-and-blast orchestration:
+      1. Query matching active buyers from Supabase
+      2. Blast all matched buyers
+      3. Add summary note to the deal contact in GHL
+
+    Raises RuntimeError if Supabase is unreachable (caller should surface this).
+    """
+    try:
+        buyers = match_buyers(deal_data)
+    except Exception as exc:
+        log.error("Supabase unreachable in match_and_blast: %s", exc)
+        _add_note(
+            deal_contact_id,
+            "⚠️ Dispo blast ABORTED — Supabase unreachable. Check DB connection and retry.",
+        )
+        raise
+
+    if not buyers:
+        log.warning("match_and_blast: no buyers matched deal %s", deal_id)
+        _add_note(
+            deal_contact_id,
+            "ℹ️ Dispo blast: no buyers matched in cash_buyers DB. "
+            "Check buyer criteria (price range, state, property type) and re-run.",
+        )
+        return {"matched": 0, "blasted": 0}
+
+    blasted = blast_buyers(deal_id, deal_data, buyers)
+
+    _add_note(
+        deal_contact_id,
+        f"📤 Dispo blast complete — {blasted}/{len(buyers)} buyers contacted for deal {deal_id}.",
+    )
+    return {"matched": len(buyers), "blasted": blasted}
