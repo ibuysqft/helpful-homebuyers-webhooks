@@ -47,6 +47,11 @@ LOCATION_ID = "18Qc6ZWft7zdNY4oZUSm"
 MARCUS_AGENT_ID = "agent_66939b0a2da6f2e37fe99edc54"
 MARCUS_PHONE = os.getenv("MARCUS_PHONE", "")  # Set once phone provisioned in HHB On Market
 
+# Commercial On Market (Grant)
+COMMERCIAL_LOCATION_ID = "YJb8a3iGGQ1N2TQJM0yD"
+GRANT_AGENT_ID = os.getenv("GRANT_AGENT_ID", "")
+GRANT_PHONE    = os.getenv("GRANT_PHONE", "")
+
 GHL_BASE = "https://services.leadconnectorhq.com"
 RETELL_BASE = "https://api.retellai.com"
 
@@ -684,3 +689,70 @@ def dispatch_track(
         track_d_voicemail(contact_id, contact_name, address, to_number)
 
     return track
+
+
+# ── Grant — Commercial On Market ──────────────────────────────────────────────
+
+def trigger_grant_call(
+    contact_id: str,
+    broker_name: str,
+    address: str,
+    to_number: str,
+    asking_price: str = "",
+    property_type: str = "",
+    days_on_market: str = "",
+    cap_rate: str = "not listed",
+    noi: str = "not listed",
+    unit_count: str = "N/A",
+) -> bool:
+    """
+    Trigger an outbound Grant call via Retell for a commercial Crexi lead.
+    Requires GRANT_PHONE and GRANT_AGENT_ID env vars.
+    """
+    if not GRANT_PHONE or not GRANT_AGENT_ID:
+        log.warning("trigger_grant_call: GRANT_PHONE or GRANT_AGENT_ID not set — skipping %s", contact_id)
+        _add_note(
+            contact_id,
+            f"⚠️ Grant call SKIPPED — GRANT_PHONE or GRANT_AGENT_ID not configured.\n"
+            f"Broker: {broker_name} | {address}",
+        )
+        return False
+
+    if not to_number:
+        log.warning("trigger_grant_call: no phone for contact %s", contact_id)
+        return False
+
+    payload = {
+        "agent_id": GRANT_AGENT_ID,
+        "from_number": GRANT_PHONE,
+        "to_number": to_number,
+        "retell_llm_dynamic_variables": {
+            "contact_id":       contact_id,
+            "name":             broker_name,
+            "property_address": address,
+            "asking_price":     asking_price,
+            "property_type":    property_type,
+            "days_on_market":   days_on_market,
+            "cap_rate":         cap_rate,
+            "noi":              noi,
+            "unit_count":       unit_count,
+        },
+    }
+
+    try:
+        r = requests.post(
+            f"{RETELL_BASE}/v2/create-phone-call",
+            headers=RETELL_HEADERS,
+            json=payload,
+            timeout=15,
+        )
+        success = r.status_code in (200, 201)
+        if success:
+            log.info("Grant call triggered → %s (%s) | %s", contact_id, to_number, address)
+            _add_note(contact_id, f"📞 Grant outbound call triggered for {address}.")
+        else:
+            log.error("Grant call FAILED %s: %s %s", contact_id, r.status_code, r.text[:200])
+        return success
+    except requests.RequestException as exc:
+        log.error("trigger_grant_call request failed: %s", exc)
+        return False

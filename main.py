@@ -28,9 +28,16 @@ GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 CALENDAR_ID     = os.getenv("CALENDAR_ID", "BqJ0rjqAFgh7VMJUvI5U")
 GHL_BASE        = "https://services.leadconnectorhq.com"
 
-# HHB On Market (Marcus)
+# HHB On Market — Residential MLS (Marcus)
 GHL_LOCATION_ID_ON_MARKET = "18Qc6ZWft7zdNY4oZUSm"
 MARCUS_AGENT_ID           = "agent_66939b0a2da6f2e37fe99edc54"
+
+# HHB Commercial On Market — Crexi/DealSauce (Grant)
+GHL_LOCATION_ID_COMMERCIAL = "YJb8a3iGGQ1N2TQJM0yD"
+GRANT_AGENT_ID             = os.getenv("GRANT_AGENT_ID", "")
+GRANT_PHONE                = os.getenv("GRANT_PHONE", "")
+GRANT_CALENDAR_ID          = os.getenv("GRANT_CALENDAR_ID", "")
+GRANT_PIPELINE_ID          = os.getenv("GRANT_PIPELINE_ID", "")
 
 # Appointment duration in minutes (real estate consultations = 30 min min)
 APPT_DURATION_MIN = int(os.getenv("APPT_DURATION_MIN", "30"))
@@ -47,7 +54,7 @@ from stage_map import STAGE_MAP
 # Flags/urgency values that trigger escalation
 URGENT_FLAGS = {"urgent_under_14_days", "critical_-_under_14_days"}
 
-VALID_AGENTS = {"shelby", "alex", "cole", "jordan", "marcus"}
+VALID_AGENTS = {"shelby", "alex", "cole", "jordan", "marcus", "grant"}
 
 # ── Retell agent_id → GHL outbound phone number ───────────────────────────────
 AGENT_PHONE_MAP = {
@@ -58,6 +65,7 @@ AGENT_PHONE_MAP = {
     "agent_56e1def11bd5201bcdc1fedd6b": "+12133720548",  # Cole acquisitions
     "agent_dd0928ae5479516c905c55ca4d": "+12134747691",  # Jordan estate
     MARCUS_AGENT_ID: os.getenv("MARCUS_PHONE", ""),      # Marcus MLS On Market (set MARCUS_PHONE env var)
+    GRANT_AGENT_ID:  GRANT_PHONE,                         # Grant Commercial On Market
 }
 
 # ── Outcome-based SMS templates (NEPQ/Hormozi style) ─────────────────────────
