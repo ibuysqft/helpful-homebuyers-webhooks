@@ -629,6 +629,15 @@ async def retell_call_outcome(request: Request):
         if jenni_track:
             log.info("Jenni Track %s dispatched for contact %s", jenni_track, contact_id)
 
+        # ── buyer_qualified → book Commercial Deals calendar ─────────────────
+        if call_outcome == "buyer_qualified":
+            from dispo_tracks import handle_buyer_qualified
+            booking = handle_buyer_qualified(contact_id)
+            log.info(
+                "buyer_qualified: contact=%s opp=%s booked=%s appt=%s",
+                contact_id, booking.get("opp_id"), booking.get("booked"), booking.get("appt_id"),
+            )
+
     return {
         "success":          True,
         "contact_id":       contact_id,
@@ -642,6 +651,7 @@ async def retell_call_outcome(request: Request):
         "tags_applied":     tags_applied,
         "mls_track":        track_dispatched,
         "jenni_track":      jenni_track,
+        "dispo_booked":     locals().get("booking", {}).get("booked"),
     }
 
 
@@ -661,12 +671,12 @@ async def ghl_inbound_sms(request: Request):
     """
     body = await request.json()
     contact_id = body.get("contact_id", "")
-    message = body.get("message", "")
+    message    = body.get("message", "")
+    deal_id    = body.get("deal_id", "")   # optional — passed by dispo GHL workflow
 
     if not contact_id:
         return JSONResponse({"error": "missing contact_id"}, status_code=400)
 
-    # Check if contact has Track B tag
     contact_r = _ghl_get(f"/contacts/{contact_id}")
     if not contact_r or contact_r.status_code != 200:
         return JSONResponse({"handled": False, "reason": "contact not found"})
@@ -674,14 +684,94 @@ async def ghl_inbound_sms(request: Request):
     contact = contact_r.json().get("contact", contact_r.json()) or {}
     tags = contact.get("tags", [])
 
+    # ── Dispo buyer reply ───────────────────────────────────────────────────────
+    if "dispo-blast" in tags:
+        if not deal_id:
+            # Look up deal_id from most recent unanswered dispo_blast for this contact
+            from dispo_tracks import _get_sb as _dispo_sb
+            try:
+                sb = _dispo_sb()
+                rows = (
+                    sb.table("dispo_blasts")
+                    .select("deal_opportunity_id")
+                    .eq("ghl_contact_id", contact_id)
+                    .is_("response", "null")
+                    .order("blasted_at", desc=True)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+                deal_id = rows[0]["deal_opportunity_id"] if rows else ""
+            except Exception as exc:
+                log.error("Could not look up deal_id for dispo reply contact=%s: %s", contact_id, exc)
+
+        if deal_id:
+            from dispo_tracks import handle_dispo_reply
+            result = handle_dispo_reply(contact_id, message, deal_id)
+            log.info("Dispo reply handled contact=%s sentiment=%s", contact_id, result.get("sentiment"))
+            return {"handled": True, "source": "dispo", **result}
+        else:
+            log.warning("dispo-blast contact %s replied but no deal_id found", contact_id)
+
+    # ── MLS Track B reply ───────────────────────────────────────────────────────
     if "mls-track-b-backup" not in tags:
-        log.debug("ghl-inbound-sms: contact %s not in Track B — ignoring", contact_id)
-        return JSONResponse({"handled": False, "reason": "not track B contact"})
+        log.debug("ghl-inbound-sms: contact %s not in Track B or dispo — ignoring", contact_id)
+        return JSONResponse({"handled": False, "reason": "not track B or dispo contact"})
 
     from mls_tracks import handle_inbound_reply
     triggered = handle_inbound_reply(contact_id, message)
     log.info("Track B reply handler → contact=%s triggered=%s", contact_id, triggered)
-    return {"handled": True, "call_triggered": triggered}
+    return {"handled": True, "source": "mls_track_b", "call_triggered": triggered}
+
+
+# ── GHL stage-change webhook → dispo blast trigger ────────────────────────────
+
+UNDER_CONTRACT_STAGE_ID = "7ac4e3fd"
+
+
+@app.post("/ghl-stage-change")
+async def ghl_stage_change(request: Request):
+    """
+    Fired by a GHL workflow when an opportunity moves to "Under Contract".
+
+    GHL workflow setup:
+      Trigger: Opportunity Stage Changed
+      Condition: Pipeline Stage = Under Contract (ID: 7ac4e3fd)
+      Action: Webhook POST https://<server>/ghl-stage-change
+      Body: {
+        "opportunity_id": "{{opportunity.id}}",
+        "contact_id":     "{{contact.id}}",
+        "stage_id":       "{{opportunity.pipelineStageId}}"
+      }
+    """
+    body = await request.json()
+    opp_id     = body.get("opportunity_id", "")
+    contact_id = body.get("contact_id", "")
+    stage_id   = body.get("stage_id", "")
+
+    if not opp_id or not contact_id:
+        return JSONResponse({"error": "missing opportunity_id or contact_id"}, status_code=400)
+
+    if stage_id and stage_id != UNDER_CONTRACT_STAGE_ID:
+        return JSONResponse({
+            "handled": False,
+            "reason": f"stage {stage_id} is not Under Contract — ignoring",
+        })
+
+    from dispo_tracks import match_and_blast, get_deal_data
+    deal_data = get_deal_data(opp_id)
+
+    try:
+        result = match_and_blast(opp_id, deal_data, contact_id)
+    except Exception as exc:
+        log.error("/ghl-stage-change blast failed opp=%s: %s", opp_id, exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+    log.info(
+        "Dispo blast triggered opp=%s matched=%s blasted=%s",
+        opp_id, result.get("matched"), result.get("blasted"),
+    )
+    return {"handled": True, "opportunity_id": opp_id, **result}
 
 
 # ── Manual offer+comp email trigger ──────────────────────────────────────────────
