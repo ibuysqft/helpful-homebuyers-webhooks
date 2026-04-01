@@ -3,7 +3,7 @@ Helpful Homebuyers — Webhook Server v3
 Handles all 4 Retell agents + full AI follow-up sequence system.
 
 Routes:
-  POST /{agent}-check-calendar       (agent = shelby|alex|cole|jordan)
+  POST /{agent}-check-calendar       (agent = shelby|alex|cole|jordan|jenni)
   POST /{agent}-book-appointment
   POST /{agent}-send-sms
   POST /retell-call-outcome          ← full pipeline: stage + SMS + tags
@@ -32,12 +32,12 @@ GHL_BASE        = "https://services.leadconnectorhq.com"
 GHL_LOCATION_ID_ON_MARKET = "18Qc6ZWft7zdNY4oZUSm"
 MARCUS_AGENT_ID           = "agent_66939b0a2da6f2e37fe99edc54"
 
-# HHB Commercial On Market — Crexi/DealSauce (Grant)
-GHL_LOCATION_ID_COMMERCIAL = "YJb8a3iGGQ1N2TQJM0yD"
-GRANT_AGENT_ID             = os.getenv("GRANT_AGENT_ID", "")
-GRANT_PHONE                = os.getenv("GRANT_PHONE", "")
-GRANT_CALENDAR_ID          = os.getenv("GRANT_CALENDAR_ID", "")
-GRANT_PIPELINE_ID          = os.getenv("GRANT_PIPELINE_ID", "")
+# Jenni Commercial On Market — Crexi/DealSauce (Jenni)
+GHL_LOCATION_ID_COMMERCIAL = os.getenv("GHL_LOCATION_ID_ON_MARKET", "18Qc6ZWft7zdNY4oZUSm")
+JENNI_AGENT_ID             = os.getenv("JENNI_AGENT_ID", "")
+JENNI_PHONE                = os.getenv("JENNI_PHONE", "")
+JENNI_CALENDAR_ID          = os.getenv("JENNI_CALENDAR_ID", "")
+JENNI_PIPELINE_ID          = os.getenv("JENNI_PIPELINE_ID", "")
 
 # Appointment duration in minutes (real estate consultations = 30 min min)
 APPT_DURATION_MIN = int(os.getenv("APPT_DURATION_MIN", "30"))
@@ -54,7 +54,7 @@ from stage_map import STAGE_MAP
 # Flags/urgency values that trigger escalation
 URGENT_FLAGS = {"urgent_under_14_days", "critical_-_under_14_days"}
 
-VALID_AGENTS = {"shelby", "alex", "cole", "jordan", "marcus", "grant"}
+VALID_AGENTS = {"shelby", "alex", "cole", "jordan", "marcus", "jenni"}
 
 # ── Retell agent_id → GHL outbound phone number ───────────────────────────────
 AGENT_PHONE_MAP = {
@@ -65,7 +65,7 @@ AGENT_PHONE_MAP = {
     "agent_56e1def11bd5201bcdc1fedd6b": "+12133720548",  # Cole acquisitions
     "agent_dd0928ae5479516c905c55ca4d": "+12134747691",  # Jordan estate
     MARCUS_AGENT_ID: os.getenv("MARCUS_PHONE", ""),      # Marcus MLS On Market (set MARCUS_PHONE env var)
-    GRANT_AGENT_ID:  GRANT_PHONE,                         # Grant Commercial On Market
+    JENNI_AGENT_ID:  JENNI_PHONE,                         # Jenni Commercial On Market
 }
 
 # ── Outcome-based SMS templates (NEPQ/Hormozi style) ─────────────────────────
@@ -308,12 +308,16 @@ async def startup_event():
     _load_pipeline_cache()
     from mls_tracks import start_scheduler
     start_scheduler()
+    from jenni_tracks import start_scheduler as jenni_start_scheduler
+    jenni_start_scheduler()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     from mls_tracks import stop_scheduler
     stop_scheduler()
+    from jenni_tracks import stop_scheduler as jenni_stop_scheduler
+    jenni_stop_scheduler()
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -605,6 +609,26 @@ async def retell_call_outcome(request: Request):
         if track_dispatched:
             log.info("MLS Track %s dispatched for contact %s", track_dispatched, contact_id)
 
+    # ── Jenni track dispatch (commercial Crexi calls) ─────────────────────────
+    jenni_track = None
+    if agent_id == JENNI_AGENT_ID:
+        from jenni_tracks import dispatch_track as jenni_dispatch
+        contact_phone = ""
+        contact_r = _ghl_get(f"/contacts/{contact_id}")
+        if contact_r and contact_r.status_code == 200:
+            contact_phone = (contact_r.json().get("contact", contact_r.json()) or {}).get("phone", "")
+        jenni_track = jenni_dispatch(
+            contact_id, call_outcome, contact_name, prop_address, contact_phone,
+            asking_price=dynamic_vars.get("asking_price", ""),
+            property_type=dynamic_vars.get("property_type", ""),
+            days_on_market=dynamic_vars.get("days_on_market", ""),
+            cap_rate=dynamic_vars.get("cap_rate", "not listed"),
+            noi=custom.get("noi_collected") or dynamic_vars.get("noi", "not listed"),
+            unit_count=dynamic_vars.get("unit_count", "N/A"),
+        )
+        if jenni_track:
+            log.info("Jenni Track %s dispatched for contact %s", jenni_track, contact_id)
+
     return {
         "success":          True,
         "contact_id":       contact_id,
@@ -617,6 +641,7 @@ async def retell_call_outcome(request: Request):
         "sms_sent":         sms_sent,
         "tags_applied":     tags_applied,
         "mls_track":        track_dispatched,
+        "jenni_track":      jenni_track,
     }
 
 
