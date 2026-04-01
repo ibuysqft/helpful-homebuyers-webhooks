@@ -250,3 +250,27 @@ CREATE INDEX idx_deals_status          ON deals (status);
 
 -- cash_buyers
 CREATE INDEX idx_cash_buyers_status    ON cash_buyers (status);
+
+
+-- ---------------------------------------------------------------------------
+-- 7. dispo_blasts — idempotent record of buyer blast events
+-- ---------------------------------------------------------------------------
+CREATE TABLE dispo_blasts (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    deal_opportunity_id   TEXT NOT NULL,
+    buyer_id              UUID NOT NULL REFERENCES cash_buyers(id),
+    ghl_contact_id        TEXT,
+    ghl_opp_id            TEXT,
+    blasted_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    response              TEXT,
+    response_at           TIMESTAMPTZ,
+    outcome               TEXT,
+    UNIQUE(deal_opportunity_id, buyer_id)
+);
+
+COMMENT ON TABLE dispo_blasts IS
+    'One row per (deal, buyer) blast attempt. UNIQUE constraint prevents double-blasting. '
+    'ghl_contact_id enables reply routing back to this record.';
+
+CREATE INDEX idx_dispo_blasts_ghl_contact ON dispo_blasts (ghl_contact_id);
+CREATE INDEX idx_dispo_blasts_deal        ON dispo_blasts (deal_opportunity_id);
