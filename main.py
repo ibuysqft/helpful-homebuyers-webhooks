@@ -362,15 +362,16 @@ def _get_sb_for_health():
 def health():
     checks: dict[str, str] = {}
 
-    # GHL liveness
+    # GHL liveness — direct call, no retries, 3s timeout
     try:
-        r = _ghl_get(f"/locations/{GHL_LOCATION_ID}", retries=1)
-        if r and r.status_code == 200:
-            checks["ghl"] = "ok"
-        else:
-            checks["ghl"] = f"error: status {r.status_code if r else 'no response'}"
-    except Exception as exc:
-        checks["ghl"] = f"error: {exc}"
+        _r = requests.get(
+            f"{GHL_BASE}/locations/{GHL_LOCATION_ID}",
+            headers=GHL_HEADERS,
+            timeout=3,
+        )
+        checks["ghl"] = "ok" if _r.status_code == 200 else f"error: status {_r.status_code}"
+    except Exception as _exc:
+        checks["ghl"] = f"error: {_exc}"
 
     # Supabase liveness
     try:
@@ -473,12 +474,17 @@ async def book_appointment(agent: str, request: Request):
     appt_id = appt.get("id")
     log.info("[%s] booked %s for contact %s (%dmin)", agent, appt_id, contact_id, APPT_DURATION_MIN)
 
-    # ── Confirmation SMS ──────────────────────────────────────────────────────
-    _name    = _get_contact_first_name(contact_id)
-    _address = _get_contact_address(contact_id)
+    # ── Confirmation SMS (single GHL contact fetch for name + address) ────────
     _from_no = AGENT_NAME_PHONE_MAP.get(agent, "")
     if _from_no:
         try:
+            _cr = _ghl_get(f"/contacts/{contact_id}")
+            if _cr and _cr.status_code == 200:
+                _c       = _cr.json().get("contact", _cr.json())
+                _name    = (_c.get("firstName") or "").strip() or "there"
+                _address = (_c.get("address1") or "").strip()
+            else:
+                _name, _address = "there", ""
             _send_followup_sms(contact_id, "Appointment Set", _name, _address, _from_no)
         except Exception as _sms_err:
             log.warning("[%s] Appointment Set SMS failed (booking still ok): %s", agent, _sms_err)
