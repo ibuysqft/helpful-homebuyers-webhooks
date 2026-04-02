@@ -40,6 +40,10 @@ JENNI_PHONE                = os.getenv("JENNI_PHONE", "")
 JENNI_CALENDAR_ID          = os.getenv("JENNI_CALENDAR_ID", "")
 JENNI_PIPELINE_ID          = os.getenv("JENNI_PIPELINE_ID", "")
 
+# Reagan Surplus Funds — CR_CashRights (Reagan)
+REAGAN_AGENT_ID   = "agent_5c5a513db86a21993f8c148ac6"
+REAGAN_PHONE      = "+17078463387"
+
 # Appointment duration in minutes (real estate consultations = 30 min min)
 APPT_DURATION_MIN = int(os.getenv("APPT_DURATION_MIN", "30"))
 
@@ -67,6 +71,7 @@ AGENT_PHONE_MAP = {
     "agent_dd0928ae5479516c905c55ca4d": "+12134747691",  # Jordan estate
     MARCUS_AGENT_ID: os.getenv("MARCUS_PHONE", ""),      # Marcus MLS On Market (set MARCUS_PHONE env var)
     JENNI_AGENT_ID:  JENNI_PHONE,                         # Jenni Commercial On Market
+    REAGAN_AGENT_ID: REAGAN_PHONE,                        # Reagan Surplus Funds
 }
 
 # ── Outcome-based SMS templates (NEPQ/Hormozi style) ─────────────────────────
@@ -182,8 +187,8 @@ def _ghl_request(method: str, path: str, retries: int = 3, **kwargs) -> Optional
         try:
             r = requests.request(method, url, **kwargs)
             if r.status_code == 429:
-                wait = 2 ** attempt
-                log.warning("GHL rate limit, retry in %ds", wait)
+                wait = int(r.headers.get("Retry-After", 2 ** attempt))
+                log.warning("GHL rate limit on %s, retry in %ds", path, wait)
                 time.sleep(wait)
                 continue
             if r.status_code >= 500 and attempt < retries - 1:
@@ -501,6 +506,29 @@ async def retell_call_outcome(request: Request):
     if not contact_id:
         log.warning("No contact_id for call %s", call_id)
         return JSONResponse({"success": False, "error": "no contact_id"})
+
+    # ── Reagan surplus funds — early return (dedicated pipeline, no general processing) ──
+    _agent_id = body.get("agent_id", "")
+    if _agent_id == REAGAN_AGENT_ID:
+        from surplus_tracks import handle_call_outcome as surplus_handle
+        surplus_result = surplus_handle(body)
+        log.info(
+            "Reagan surplus outcome: contact=%s outcome=%s stage_moved=%s",
+            surplus_result.get("contact_id"),
+            surplus_result.get("outcome"),
+            surplus_result.get("stage_moved"),
+        )
+        return {
+            "success":      surplus_result.get("success", True),
+            "contact_id":   surplus_result.get("contact_id"),
+            "outcome":      surplus_result.get("outcome"),
+            "opp_id":       surplus_result.get("opp_id"),
+            "stage_moved":  surplus_result.get("stage_moved"),
+            "tag_applied":  surplus_result.get("tag_applied"),
+            "task_added":   surplus_result.get("task_added"),
+            "note_added":   surplus_result.get("note_added"),
+            "track":        "surplus",
+        }
 
     ghl_stage = STAGE_MAP.get(call_outcome, "AI - No Answer")
 
