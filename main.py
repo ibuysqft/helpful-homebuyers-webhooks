@@ -187,7 +187,8 @@ def _ghl_request(method: str, path: str, retries: int = 3, **kwargs) -> Optional
         try:
             r = requests.request(method, url, **kwargs)
             if r.status_code == 429:
-                wait = int(r.headers.get("Retry-After", 2 ** attempt))
+                _raw_ra = r.headers.get("Retry-After", "")
+                wait = int(_raw_ra) if _raw_ra.isdigit() else 2 ** attempt
                 log.warning("GHL rate limit on %s, retry in %ds", path, wait)
                 time.sleep(wait)
                 continue

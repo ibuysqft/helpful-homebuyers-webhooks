@@ -46,5 +46,19 @@ class TestGhlRequestRetryAfter(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
 
 
+    @patch("main.time.sleep")
+    @patch("main.requests.request")
+    def test_falls_back_to_exponential_when_retry_after_is_date_string(self, mock_req, mock_sleep):
+        """429 with Retry-After as HTTP-date → fall back to 2**attempt, no crash."""
+        import main
+        mock_req.side_effect = [
+            self._make_response(429, retry_after="Wed, 01 Apr 2026 12:00:00 GMT"),
+            self._make_response(200),
+        ]
+        result = main._ghl_request("GET", "/test")
+        mock_sleep.assert_called_once_with(1)  # 2**0 = 1
+        self.assertEqual(result.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()
