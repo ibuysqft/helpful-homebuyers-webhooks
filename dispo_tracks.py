@@ -575,10 +575,10 @@ def handle_dispo_reply(contact_id: str, message: str, deal_id: str) -> dict:
     # Unclear — buyer is engaged but hasn't expressed interest yet.
     # Send a clarification SMS to re-explain the deal; do NOT call Jenni.
     if sentiment == "unclear":
+        _addr = deal_data.get("address") or "a property we're working on"
         clarification = (
             f"Hey {buyer_name}! This is Jenni from Helpful Homebuyers. "
-            f"I reached out because we have a commercial deal at "
-            f"{deal_data.get('address', 'a property we\\'re working on')} "
+            f"I reached out because we have a commercial deal at {_addr} "
             f"that might be a great fit for your buy criteria. "
             f"Are you open to hearing more details? Just reply YES and I'll send them over."
         )
