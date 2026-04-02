@@ -74,6 +74,16 @@ AGENT_PHONE_MAP = {
     REAGAN_AGENT_ID: REAGAN_PHONE,                        # Reagan Surplus Funds
 }
 
+# Agent name (URL param) → outbound GHL phone number for SMS
+AGENT_NAME_PHONE_MAP: dict[str, str] = {
+    "shelby":  "+17036915670",
+    "alex":    "+17038402238",
+    "cole":    "+12133720548",
+    "jordan":  "+12134747691",
+    "marcus":  os.getenv("MARCUS_PHONE", ""),
+    "jenni":   JENNI_PHONE,
+}
+
 # ── Outcome-based SMS templates (NEPQ/Hormozi style) ─────────────────────────
 # {name} = contact first name, {address} = property address
 SMS_TEMPLATES: dict[str, Optional[str]] = {
@@ -268,6 +278,14 @@ def _get_contact_first_name(contact_id: str) -> str:
         return (contact.get("firstName") or contact.get("first_name") or "").strip() or "there"
     return "there"
 
+def _get_contact_address(contact_id: str) -> str:
+    """Fetch contact address1 from GHL for SMS personalization. Returns '' on any error."""
+    r = _ghl_get(f"/contacts/{contact_id}")
+    if r and r.status_code == 200:
+        contact = r.json().get("contact", r.json())
+        return (contact.get("address1") or "").strip()
+    return ""
+
 def _send_followup_sms(contact_id: str, outcome: str, name: str, address: str, from_number: str) -> bool:
     """Send outcome-based follow-up SMS via GHL immediately after call ends."""
     template = SMS_TEMPLATES.get(outcome)
@@ -419,6 +437,16 @@ async def book_appointment(agent: str, request: Request):
     appt    = r.json().get("appointment", r.json())
     appt_id = appt.get("id")
     log.info("[%s] booked %s for contact %s (%dmin)", agent, appt_id, contact_id, APPT_DURATION_MIN)
+
+    # ── Confirmation SMS ──────────────────────────────────────────────────────
+    _name    = _get_contact_first_name(contact_id)
+    _address = _get_contact_address(contact_id)
+    _from_no = AGENT_NAME_PHONE_MAP.get(agent, "")
+    if _from_no:
+        try:
+            _send_followup_sms(contact_id, "Appointment Set", _name, _address, _from_no)
+        except Exception as _sms_err:
+            log.warning("[%s] Appointment Set SMS failed (booking still ok): %s", agent, _sms_err)
 
     return {
         "success":            True,

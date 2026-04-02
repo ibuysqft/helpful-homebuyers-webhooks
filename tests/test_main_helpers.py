@@ -60,5 +60,80 @@ class TestGhlRequestRetryAfter(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
 
 
+class TestBookAppointmentNotify(unittest.TestCase):
+    """book_appointment must send Appointment Set SMS after a successful booking."""
+
+    @patch("main._ghl_post")
+    @patch("main._ghl_get")
+    @patch("main._verify_contact")
+    @patch("main._send_followup_sms")
+    def test_sends_appointment_set_sms_on_success(
+        self, mock_sms, mock_verify, mock_get, mock_post
+    ):
+        """Successful booking triggers _send_followup_sms with 'Appointment Set'."""
+        from fastapi.testclient import TestClient
+        import main
+
+        mock_verify.return_value = True
+
+        contact_resp = MagicMock()
+        contact_resp.status_code = 200
+        contact_resp.json.return_value = {
+            "contact": {"firstName": "Alice", "address1": "123 Main St"}
+        }
+        mock_get.return_value = contact_resp
+
+        booking_resp = MagicMock()
+        booking_resp.status_code = 201
+        booking_resp.json.return_value = {"appointment": {"id": "appt-abc"}}
+        mock_post.return_value = booking_resp
+
+        client = TestClient(main.app)
+        resp = client.post("/shelby-book-appointment", json={
+            "contact_id": "contact-xyz",
+            "start_time": "2026-04-10T14:00:00Z",
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        mock_sms.assert_called_once()
+        args = mock_sms.call_args[0]
+        self.assertEqual(args[1], "Appointment Set")
+        self.assertEqual(args[2], "Alice")
+        self.assertEqual(args[3], "123 Main St")
+
+    @patch("main._ghl_post")
+    @patch("main._ghl_get")
+    @patch("main._verify_contact")
+    @patch("main._send_followup_sms")
+    def test_booking_succeeds_even_if_sms_fails(
+        self, mock_sms, mock_verify, mock_get, mock_post
+    ):
+        """SMS failure must not fail the booking response."""
+        from fastapi.testclient import TestClient
+        import main
+
+        mock_verify.return_value = True
+        mock_sms.return_value = False
+
+        contact_resp = MagicMock()
+        contact_resp.status_code = 200
+        contact_resp.json.return_value = {"contact": {"firstName": "Bob", "address1": ""}}
+        mock_get.return_value = contact_resp
+
+        booking_resp = MagicMock()
+        booking_resp.status_code = 201
+        booking_resp.json.return_value = {"appointment": {"id": "appt-def"}}
+        mock_post.return_value = booking_resp
+
+        client = TestClient(main.app)
+        resp = client.post("/alex-book-appointment", json={
+            "contact_id": "contact-abc",
+            "start_time": "2026-04-11T10:00:00Z",
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.json()["success"])
+
+
 if __name__ == "__main__":
     unittest.main()
