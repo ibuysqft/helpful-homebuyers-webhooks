@@ -6,7 +6,7 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: GHL_API_KEY
-        value: pit-db848c79-dc09-4ba7-aadf-7a21db5f30d1
+        sync: false   # set manually in Render dashboard — never commit the value
       - key: GHL_LOCATION_ID
         value: Jy8irfJWPVtq3vycsvx4
       - key: CALENDAR_ID
@@ -15,5 +15,53 @@ services:
         value: "30"
       - key: COMP_PULLER_URL
         value: https://helpful-homebuyers-comp-puller.onrender.com
+      - key: RETELL_API_KEY
+        sync: false   # set manually in Render dashboard — never commit the value
+      - key: ANTHROPIC_API_KEY
+        sync: false   # set manually in Render dashboard — never commit the value
+      # ── Jenni Commercial Dispo ───────────────────────────────────────────────
+      - key: JENNI_AGENT_ID
+        sync: false   # Retell agent ID for Jenni
+      - key: JENNI_PHONE
+        sync: false   # GHL phone number for Jenni SMS (from-number)
+      - key: JENNI_RETELL_PHONE
+        sync: false   # Retell-Twilio number for outbound calls (REQUIRED for calls)
+      - key: JENNI_CALENDAR_ID
+        sync: false   # GHL calendar ID for Jenni appointment booking
+      - key: JENNI_PIPELINE_ID
+        sync: false   # GHL pipeline ID for Jenni commercial track
+      - key: GHL_DISPO_PIPELINE_ID
+        sync: false   # Commercial Dispo GHL pipeline ID (avoids lookup on every blast)
+      # ── Marcus MLS On Market ─────────────────────────────────────────────────
+      - key: MARCUS_PHONE
+        sync: false   # GHL outbound number for Marcus SMS notifications
+      # ── Supabase ─────────────────────────────────────────────────────────────
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      # ── Scheduler jobstores (Postgres URLs keep jobs across restarts) ────────
+      - key: MLS_TRACK_JOBSTORE
+        sync: false   # postgresql+psycopg2://user:pass@host/db — required in prod
+      - key: JENNI_TRACK_JOBSTORE
+        sync: false   # postgresql+psycopg2://user:pass@host/db — required in prod
+    plan: free
+    region: oregon
+
+  - type: cron
+    name: surplus-call-trigger
+    runtime: python
+    schedule: "0 16 * * 1-5"   # 9 AM PT Mon–Fri (UTC-7 summer / UTC-8 winter — use 16:00 UTC for safety)
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      cd /opt/render/project/src &&
+      python pipeline/scripts/calls/trigger_surplus_calls.py --fire --limit 50
+    envVars:
+      - key: GHL_API_KEY
+        sync: false
+      - key: GHL_LOCATION_ID
+        value: Jy8irfJWPVtq3vycsvx4
+      - key: RETELL_API_KEY
+        sync: false
     plan: free
     region: oregon

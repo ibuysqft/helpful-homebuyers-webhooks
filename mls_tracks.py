@@ -39,10 +39,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 log = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────────────────────────────────
-_GHL_KEY = os.getenv(
-    "GHL_API_KEY_ON_MARKET",
-    os.getenv("GHL_API_KEY", "pit-db848c79-dc09-4ba7-aadf-7a21db5f30d1"),
-)
+_GHL_KEY = os.getenv("GHL_API_KEY_ON_MARKET") or os.getenv("GHL_API_KEY", "")
 LOCATION_ID = "18Qc6ZWft7zdNY4oZUSm"
 MARCUS_AGENT_ID = "agent_66939b0a2da6f2e37fe99edc54"
 MARCUS_PHONE = os.getenv("MARCUS_PHONE", "")  # Set once phone provisioned in HHB On Market
@@ -62,15 +59,21 @@ GHL_HEADERS = {
 }
 
 RETELL_HEADERS = {
-    "Authorization": f"Bearer {os.getenv('RETELL_API_KEY', 'key_12f1fbb716ca537c2651a70d2710')}",
+    "Authorization": f"Bearer {os.getenv('RETELL_API_KEY', '')}",
     "Content-Type": "application/json",
 }
 
-JOBSTORE_PATH = os.getenv("MLS_TRACK_JOBSTORE", "/tmp/mls_tracks.db")
+# Supports both a plain file path (dev) and a full SQLAlchemy URL (prod Postgres).
+_mls_jobstore_env = os.getenv("MLS_TRACK_JOBSTORE", "")
+JOBSTORE_URL = (
+    _mls_jobstore_env
+    if _mls_jobstore_env.startswith(("postgresql", "sqlite"))
+    else "sqlite:////tmp/mls_tracks.db"
+)
 
 # ── Scheduler ───────────────────────────────────────────────────────────────────
 _scheduler = BackgroundScheduler(
-    jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{JOBSTORE_PATH}")},
+    jobstores={"default": SQLAlchemyJobStore(url=JOBSTORE_URL)},
     executors={"default": ThreadPoolExecutor(4)},
     timezone="America/Los_Angeles",
 )

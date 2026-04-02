@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse
 import pathlib
 
 # ── Config ────────────────────────────────────────────────────────────────────
-GHL_API_KEY     = os.getenv("GHL_API_KEY", "pit-db848c79-dc09-4ba7-aadf-7a21db5f30d1")
+GHL_API_KEY     = os.getenv("GHL_API_KEY", "")
 GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 CALENDAR_ID     = os.getenv("CALENDAR_ID", "BqJ0rjqAFgh7VMJUvI5U")
 GHL_BASE        = "https://services.leadconnectorhq.com"
@@ -990,3 +990,47 @@ async def buyer_optin(request: Request):
 
     log.info("Buyer opt-in: %s (%s)", email, phone)
     return {"success": True, "email": email}
+
+
+# ── Universal AI SMS agent ─────────────────────────────────────────────────────
+
+@app.post("/ghl-sms-ai")
+async def ghl_sms_ai(request: Request):
+    """
+    Universal AI SMS reply handler — covers all contacts not handled by
+    specialized tracks (dispo, MLS Track B).
+
+    GHL workflow setup:
+      Trigger: Customer Reply (SMS)
+      Condition: Contact does NOT have tags mls-track-b-backup OR dispo-blast
+                 (or add this as a parallel branch to the existing workflow)
+      Action: Webhook POST https://<server>/ghl-sms-ai
+      Body: {
+        "contact_id":   "{{contact.id}}",
+        "message":      "{{message.body}}",
+        "from_number":  "{{message.phone}}"
+      }
+
+    Returns:
+      { handled, intent, persona, sms_sent, call_triggered }
+    """
+    body = await request.json()
+    contact_id  = (body.get("contact_id") or "").strip()
+    message     = (body.get("message") or "").strip()
+    from_number = (body.get("from_number") or "").strip()
+
+    if not contact_id:
+        return JSONResponse({"error": "missing contact_id"}, status_code=400)
+    if not message:
+        return JSONResponse({"error": "missing message"}, status_code=400)
+
+    from sms_agent import handle_sms_ai
+    result = handle_sms_ai(contact_id, message, from_number)
+    log.info(
+        "/ghl-sms-ai contact=%s intent=%s sms_sent=%s call=%s",
+        contact_id,
+        result.get("intent"),
+        result.get("sms_sent"),
+        result.get("call_triggered"),
+    )
+    return result

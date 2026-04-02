@@ -43,12 +43,9 @@ log = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 
-_GHL_KEY = os.getenv(
-    "GHL_API_KEY_ON_MARKET",
-    os.getenv("GHL_API_KEY", "pit-c70c4e2b-ce17-4c4d-be4b-0cbe277f608b"),
-)
+_GHL_KEY = os.getenv("GHL_API_KEY_ON_MARKET") or os.getenv("GHL_API_KEY", "")
 LOCATION_ID    = "18Qc6ZWft7zdNY4oZUSm"
-JENNI_AGENT_ID    = os.getenv("JENNI_AGENT_ID", "agent_6f1e740f9a573d69a775539854")
+JENNI_AGENT_ID    = os.getenv("JENNI_AGENT_ID", "")
 JENNI_PHONE       = os.getenv("JENNI_PHONE", "")         # GHL number — used for SMS fromNumber
 JENNI_RETELL_PHONE = os.getenv("JENNI_RETELL_PHONE", "")  # Retell-Twilio — used for outbound calls
 
@@ -62,16 +59,22 @@ GHL_HEADERS = {
 }
 
 RETELL_HEADERS = {
-    "Authorization": f"Bearer {os.getenv('RETELL_API_KEY', 'key_12f1fbb716ca537c2651a70d2710')}",
+    "Authorization": f"Bearer {os.getenv('RETELL_API_KEY', '')}",
     "Content-Type": "application/json",
 }
 
-JOBSTORE_PATH = os.getenv("JENNI_TRACK_JOBSTORE", "/tmp/jenni_tracks.db")
+# Supports both a plain file path (dev) and a full SQLAlchemy URL (prod Postgres).
+_jenni_jobstore_env = os.getenv("JENNI_TRACK_JOBSTORE", "")
+JOBSTORE_URL = (
+    _jenni_jobstore_env
+    if _jenni_jobstore_env.startswith(("postgresql", "sqlite"))
+    else "sqlite:////tmp/jenni_tracks.db"
+)
 
 # ── Scheduler ────────────────────────────────────────────────────────────────────
 
 _scheduler = BackgroundScheduler(
-    jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{JOBSTORE_PATH}")},
+    jobstores={"default": SQLAlchemyJobStore(url=JOBSTORE_URL)},
     executors={"default": ThreadPoolExecutor(4)},
     timezone="America/Los_Angeles",
 )
