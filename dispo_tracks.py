@@ -563,12 +563,7 @@ def handle_dispo_reply(contact_id: str, message: str, deal_id: str) -> dict:
             advance_dispo_opp(opp_id, "Dead")
         return {"sentiment": "negative", "action": "opp_closed"}
 
-    # Positive or unclear — advance and call
-    if opp_id:
-        advance_dispo_opp(opp_id, "Interest Confirmed")
-        advance_dispo_opp(opp_id, "Jenni Qualifying")
-
-    # Fetch buyer phone from GHL contact
+    # Fetch contact info once — used by both unclear and positive paths
     contact_r = _ghl_get(f"/contacts/{contact_id}")
     buyer_phone = ""
     buyer_name = "there"
@@ -576,6 +571,24 @@ def handle_dispo_reply(contact_id: str, message: str, deal_id: str) -> dict:
         c = contact_r.json().get("contact", contact_r.json()) or {}
         buyer_phone = c.get("phone", "")
         buyer_name = c.get("firstName", "there")
+
+    # Unclear — buyer is engaged but hasn't expressed interest yet.
+    # Send a clarification SMS to re-explain the deal; do NOT call Jenni.
+    if sentiment == "unclear":
+        clarification = (
+            f"Hey {buyer_name}! This is Jenni from Helpful Homebuyers. "
+            f"I reached out because we have a commercial deal at "
+            f"{deal_data.get('address', 'a property we\\'re working on')} "
+            f"that might be a great fit for your buy criteria. "
+            f"Are you open to hearing more details? Just reply YES and I'll send them over."
+        )
+        _send_sms(contact_id, clarification)
+        return {"sentiment": "unclear", "action": "clarification_sent"}
+
+    # Positive — advance pipeline and trigger Jenni qualifying call
+    if opp_id:
+        advance_dispo_opp(opp_id, "Interest Confirmed")
+        advance_dispo_opp(opp_id, "Jenni Qualifying")
 
     _call_fn = _get_trigger_jenni_call()
     call_ok = _call_fn(

@@ -386,13 +386,8 @@ def test_negative_reply_no_jenni():
 
 def test_unclear_reply_no_jenni():
     """
-    Spec: unclear reply should NOT trigger Jenni.
-    Actual code (handle_dispo_reply): unclear branches to the same path as positive
-    and DOES call Jenni. This test verifies the current implementation behavior
-    (unclear → call triggered, sentiment='unclear').
-
-    NOTE: if the business rule changes so that unclear skips the Jenni call,
-    update handle_dispo_reply in dispo_tracks.py and flip the assertion below.
+    Unclear reply → clarification SMS sent, Jenni call NOT triggered.
+    The buyer hasn't expressed interest yet so we re-explain the deal first.
     """
     fake_sb = FakeSupabase(buyers=list(SEEDED_BUYERS))
     ghl_get = _make_ghl_get_mock(tags=["dispo-blast"])
@@ -420,9 +415,8 @@ def test_unclear_reply_no_jenni():
     data = resp.json()
     assert data["handled"] is True
     assert data.get("sentiment") == "unclear"
-    # Current code routes unclear → Jenni call (same path as positive).
-    # Assert the call WAS made to reflect actual implementation behavior.
-    mock_jenni.assert_called_once()
+    assert data.get("action") == "clarification_sent"
+    mock_jenni.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
