@@ -348,14 +348,49 @@ async def shutdown_event():
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
+def _get_sb_for_health():
+    """Probe Supabase by selecting a row from cash_buyers. Raises on any error."""
+    try:
+        from dispo_tracks import _get_sb
+        sb = _get_sb()
+        sb.table("cash_buyers").select("id").limit(1).execute()
+    except ImportError:
+        pass  # Supabase not configured — skip check
+
+
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "version": "2.0.0",
+    checks: dict[str, str] = {}
+
+    # GHL liveness
+    try:
+        r = _ghl_get(f"/locations/{GHL_LOCATION_ID}", retries=1)
+        if r and r.status_code == 200:
+            checks["ghl"] = "ok"
+        else:
+            checks["ghl"] = f"error: status {r.status_code if r else 'no response'}"
+    except Exception as exc:
+        checks["ghl"] = f"error: {exc}"
+
+    # Supabase liveness
+    try:
+        _get_sb_for_health()
+        checks["supabase"] = "ok"
+    except Exception as exc:
+        checks["supabase"] = f"error: {exc}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    body = {
+        "status":                 "ok" if all_ok else "degraded",
+        "version":                "2.0.0",
+        "checks":                 checks,
         "pipeline_stages_cached": sum(len(v) for v in _pipeline_cache.values()),
-        "appt_duration_min": APPT_DURATION_MIN,
+        "appt_duration_min":      APPT_DURATION_MIN,
     }
+
+    if not all_ok:
+        return JSONResponse(body, status_code=503)
+    return body
 
 # ── Calendar availability ─────────────────────────────────────────────────────
 

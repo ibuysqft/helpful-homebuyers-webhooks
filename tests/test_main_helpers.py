@@ -135,5 +135,46 @@ class TestBookAppointmentNotify(unittest.TestCase):
         self.assertTrue(resp.json()["success"])
 
 
+class TestHealthLiveness(unittest.TestCase):
+    def _client(self):
+        from fastapi.testclient import TestClient
+        import main
+        return TestClient(main.app)
+
+    @patch("main._ghl_get")
+    @patch("main._get_sb_for_health")
+    def test_health_ok_when_all_pass(self, mock_sb, mock_ghl):
+        ghl_resp = MagicMock()
+        ghl_resp.status_code = 200
+        mock_ghl.return_value = ghl_resp
+        mock_sb.return_value = None
+        resp = self._client().get("/health")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["status"], "ok")
+        self.assertEqual(resp.json()["checks"]["ghl"], "ok")
+        self.assertEqual(resp.json()["checks"]["supabase"], "ok")
+
+    @patch("main._ghl_get")
+    @patch("main._get_sb_for_health")
+    def test_health_503_when_ghl_fails(self, mock_sb, mock_ghl):
+        mock_ghl.return_value = None
+        mock_sb.return_value = None
+        resp = self._client().get("/health")
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.json()["status"], "degraded")
+        self.assertIn("error", resp.json()["checks"]["ghl"])
+
+    @patch("main._ghl_get")
+    @patch("main._get_sb_for_health")
+    def test_health_503_when_supabase_fails(self, mock_sb, mock_ghl):
+        ghl_resp = MagicMock()
+        ghl_resp.status_code = 200
+        mock_ghl.return_value = ghl_resp
+        mock_sb.side_effect = Exception("connection refused")
+        resp = self._client().get("/health")
+        self.assertEqual(resp.status_code, 503)
+        self.assertIn("error", resp.json()["checks"]["supabase"])
+
+
 if __name__ == "__main__":
     unittest.main()
