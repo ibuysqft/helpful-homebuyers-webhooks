@@ -22,7 +22,7 @@ GHL_HEADERS     = {
     "Version": "2021-07-28",
     "Content-Type": "application/json",
 }
-GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "18Qc6ZWft7zdNY4oZUSm")
+GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")

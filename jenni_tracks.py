@@ -43,8 +43,8 @@ log = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────────────────────────────────
 
-_GHL_KEY = os.getenv("GHL_API_KEY_ON_MARKET") or os.getenv("GHL_API_KEY", "")
-LOCATION_ID    = "18Qc6ZWft7zdNY4oZUSm"
+_GHL_KEY = os.getenv("GHL_API_KEY", "")
+LOCATION_ID    = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 JENNI_AGENT_ID    = os.getenv("JENNI_AGENT_ID", "")
 JENNI_PHONE       = os.getenv("JENNI_PHONE", "")         # GHL number — used for SMS fromNumber
 JENNI_RETELL_PHONE = os.getenv("JENNI_RETELL_PHONE", "")  # Retell-Twilio — used for outbound calls

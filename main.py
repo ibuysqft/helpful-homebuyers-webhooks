@@ -35,7 +35,7 @@ GHL_LOCATION_ID_ON_MARKET = "18Qc6ZWft7zdNY4oZUSm"
 MARCUS_AGENT_ID           = "agent_66939b0a2da6f2e37fe99edc54"
 
 # Jenni Commercial On Market — Crexi/DealSauce (Jenni)
-GHL_LOCATION_ID_COMMERCIAL = os.getenv("GHL_LOCATION_ID_ON_MARKET", "18Qc6ZWft7zdNY4oZUSm")
+GHL_LOCATION_ID_COMMERCIAL = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 JENNI_AGENT_ID             = os.getenv("JENNI_AGENT_ID", "")
 JENNI_PHONE                = os.getenv("JENNI_PHONE", "")
 JENNI_CALENDAR_ID          = os.getenv("JENNI_CALENDAR_ID", "")
