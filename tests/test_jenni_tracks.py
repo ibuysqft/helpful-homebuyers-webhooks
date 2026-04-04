@@ -20,6 +20,7 @@ def test_trigger_returns_false_when_no_to_number(monkeypatch):
 def test_trigger_posts_to_retell_and_returns_true(monkeypatch):
     monkeypatch.setattr(jenni_tracks, "JENNI_RETELL_PHONE", "+14158317712")
     monkeypatch.setattr(jenni_tracks, "JENNI_AGENT_ID", "agent_abc123")
+    monkeypatch.setattr(jenni_tracks, "_add_note", lambda *a, **kw: None)
 
     mock_resp = MagicMock()
     mock_resp.status_code = 201
@@ -32,7 +33,8 @@ def test_trigger_posts_to_retell_and_returns_true(monkeypatch):
         )
 
     assert result is True
-    _, kwargs = mock_post.call_args
+    # First call is the Retell create-phone-call request
+    _, kwargs = mock_post.call_args_list[0]
     payload = kwargs["json"]
     assert payload["agent_id"] == "agent_abc123"
     assert payload["from_number"] == "+14158317712"
