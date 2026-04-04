@@ -6,7 +6,7 @@ import httpx, os
 
 router = APIRouter()
 
-GHL_API_KEY = os.getenv("GHL_API_KEY", "pit-db848c79-dc09-4ba7-aadf-7a21db5f30d1")
+GHL_API_KEY = os.getenv("GHL_API_KEY", "")
 GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 GHL_BASE = "https://services.leadconnectorhq.com"
 

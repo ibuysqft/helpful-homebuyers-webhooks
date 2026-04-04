@@ -14,10 +14,11 @@ Or if already deployed, just pass the URL:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 
-RETELL_API_KEY = "key_12f1fbb716ca537c2651a70d2710"
+RETELL_API_KEY = os.getenv("RETELL_API_KEY", "")
 
 AGENTS = {
     "shelby": {
