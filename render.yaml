@@ -35,6 +35,9 @@ services:
       # ── Marcus MLS On Market ─────────────────────────────────────────────────
       - key: MARCUS_PHONE
         sync: false   # GHL outbound number for Marcus SMS notifications
+      # ── Admin endpoints ──────────────────────────────────────────────────────
+      - key: ADMIN_KEY
+        sync: false   # shared secret for /refresh-buyers — set in Render dashboard
       # ── Supabase ─────────────────────────────────────────────────────────────
       - key: SUPABASE_URL
         sync: false

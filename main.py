@@ -25,6 +25,7 @@ import pathlib
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GHL_API_KEY     = os.getenv("GHL_API_KEY", "")
+ADMIN_KEY       = os.getenv("ADMIN_KEY", "")
 GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
 CALENDAR_ID     = os.getenv("CALENDAR_ID", "BqJ0rjqAFgh7VMJUvI5U")
 GHL_BASE        = "https://services.leadconnectorhq.com"
@@ -356,6 +357,30 @@ def _get_sb_for_health():
         sb.table("cash_buyers").select("id").limit(1).execute()
     except ImportError:
         pass  # Supabase not configured — skip check
+
+
+@app.post("/refresh-buyers")
+async def refresh_buyers(request: Request):
+    """
+    Trigger a DealSauce buyer list refresh. Protected by X-Admin-Key header.
+    Runs scrape_all_buyers() then upserts results to Supabase cash_buyers.
+    """
+    provided_key = request.headers.get("X-Admin-Key", "")
+    if not ADMIN_KEY or provided_key != ADMIN_KEY:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    import sys as _sys
+    import os as _os
+    _sys.path.insert(0, _os.path.dirname(__file__))
+    from scripts.dealsauce_scraper import scrape_all_buyers, upsert_buyers
+    try:
+        buyers = await scrape_all_buyers()
+        inserted, updated = upsert_buyers(buyers)
+        log.info("/refresh-buyers: inserted=%d updated=%d", inserted, updated)
+        return {"inserted": inserted, "updated": updated, "total": len(buyers)}
+    except Exception as exc:
+        log.error("/refresh-buyers failed: %s", exc, exc_info=True)
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.get("/health")
