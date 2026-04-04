@@ -342,7 +342,7 @@ def test_positive_reply_triggers_jenni():
     assert resp.status_code == 200
     data = resp.json()
     assert data["handled"] is True
-    assert data.get("sentiment") == "positive"
+    assert data.get("dispo", {}).get("sentiment") == "positive"
     mock_jenni.assert_called_once()
 
 
@@ -376,7 +376,7 @@ def test_negative_reply_no_jenni():
     assert resp.status_code == 200
     data = resp.json()
     assert data["handled"] is True
-    assert data.get("sentiment") == "negative"
+    assert data.get("dispo", {}).get("sentiment") == "negative"
     mock_jenni.assert_not_called()
 
 
@@ -414,8 +414,8 @@ def test_unclear_reply_no_jenni():
     assert resp.status_code == 200
     data = resp.json()
     assert data["handled"] is True
-    assert data.get("sentiment") == "unclear"
-    assert data.get("action") == "clarification_sent"
+    assert data.get("dispo", {}).get("sentiment") == "unclear"
+    assert data.get("dispo", {}).get("action") == "clarification_sent"
     mock_jenni.assert_not_called()
 
 
