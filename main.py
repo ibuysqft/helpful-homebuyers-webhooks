@@ -810,6 +810,8 @@ async def ghl_inbound_sms(request: Request):
     contact = contact_r.json().get("contact", contact_r.json()) or {}
     tags = contact.get("tags", [])
 
+    handled_sources: dict = {}
+
     # ── Dispo buyer reply ───────────────────────────────────────────────────────
     if "dispo-blast" in tags:
         if not deal_id:
@@ -834,20 +836,23 @@ async def ghl_inbound_sms(request: Request):
         if deal_id:
             from dispo_tracks import handle_dispo_reply
             result = handle_dispo_reply(contact_id, message, deal_id)
+            handled_sources["dispo"] = result
             log.info("Dispo reply handled contact=%s sentiment=%s", contact_id, result.get("sentiment"))
-            return {"handled": True, "source": "dispo", **result}
         else:
             log.warning("dispo-blast contact %s replied but no deal_id found", contact_id)
 
     # ── MLS Track B reply ───────────────────────────────────────────────────────
-    if "mls-track-b-backup" not in tags:
+    if "mls-track-b-backup" in tags:
+        from mls_tracks import handle_inbound_reply
+        triggered = handle_inbound_reply(contact_id, message)
+        handled_sources["mls_track_b"] = {"call_triggered": triggered}
+        log.info("Track B reply handler → contact=%s triggered=%s", contact_id, triggered)
+
+    if not handled_sources:
         log.debug("ghl-inbound-sms: contact %s not in Track B or dispo — ignoring", contact_id)
         return JSONResponse({"handled": False, "reason": "not track B or dispo contact"})
 
-    from mls_tracks import handle_inbound_reply
-    triggered = handle_inbound_reply(contact_id, message)
-    log.info("Track B reply handler → contact=%s triggered=%s", contact_id, triggered)
-    return {"handled": True, "source": "mls_track_b", "call_triggered": triggered}
+    return {"handled": True, **handled_sources}
 
 
 # ── GHL stage-change webhook → dispo blast trigger ────────────────────────────
