@@ -282,3 +282,49 @@ class TestHandleDispoReply(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── ensure_dispo_pipeline ─────────────────────────────────────────────────────
+import pytest
+import dispo_tracks
+
+
+def test_ensure_dispo_pipeline_returns_cached_id(monkeypatch):
+    monkeypatch.setattr(dispo_tracks, "_dispo_pipeline_id", "pipe_cached_xyz")
+    with patch("dispo_tracks._ghl_get") as mock_get:
+        result = dispo_tracks.ensure_dispo_pipeline()
+    assert result == "pipe_cached_xyz"
+    mock_get.assert_not_called()
+
+
+def test_ensure_dispo_pipeline_finds_by_name(monkeypatch):
+    monkeypatch.setattr(dispo_tracks, "_dispo_pipeline_id", "")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "pipelines": [
+            {"name": "Other", "id": "other", "stages": []},
+            {"name": "Commercial Dispo", "id": "pipe_found", "stages": []},
+        ]
+    }
+    with patch("dispo_tracks._ghl_get", return_value=mock_resp), \
+         patch("dispo_tracks._populate_stage_cache"):
+        result = dispo_tracks.ensure_dispo_pipeline()
+    assert result == "pipe_found"
+
+
+def test_ensure_dispo_pipeline_raises_when_not_found(monkeypatch):
+    monkeypatch.setattr(dispo_tracks, "_dispo_pipeline_id", "")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"pipelines": [{"name": "Unrelated", "id": "abc", "stages": []}]}
+    with patch("dispo_tracks._ghl_get", return_value=mock_resp):
+        with pytest.raises(RuntimeError, match="No 'Commercial Dispo' pipeline"):
+            dispo_tracks.ensure_dispo_pipeline()
+
+
+def test_ensure_dispo_pipeline_raises_on_ghl_error(monkeypatch):
+    monkeypatch.setattr(dispo_tracks, "_dispo_pipeline_id", "")
+    with patch("dispo_tracks._ghl_get", return_value=None):
+        with pytest.raises(RuntimeError):
+            dispo_tracks.ensure_dispo_pipeline()
