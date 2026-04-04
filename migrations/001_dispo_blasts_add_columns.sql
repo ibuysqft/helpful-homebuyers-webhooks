@@ -15,3 +15,17 @@ ALTER TABLE cash_buyers
 
 CREATE INDEX IF NOT EXISTS idx_cash_buyers_states
     ON cash_buyers USING GIN (preferred_states);
+
+-- cash_buyers: add mailing address columns and source used by DealSauce scraper
+-- (DealSauce has 0 skip-trace credits so phone/email are unavailable;
+--  mailing_address is the fallback upsert key for records without contact info)
+ALTER TABLE cash_buyers
+    ADD COLUMN IF NOT EXISTS mailing_address TEXT,
+    ADD COLUMN IF NOT EXISTS mailing_city    TEXT,
+    ADD COLUMN IF NOT EXISTS mailing_state   TEXT,
+    ADD COLUMN IF NOT EXISTS mailing_zip     TEXT,
+    ADD COLUMN IF NOT EXISTS source          TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_cash_buyers_mailing_address
+    ON cash_buyers (mailing_address)
+    WHERE mailing_address IS NOT NULL;

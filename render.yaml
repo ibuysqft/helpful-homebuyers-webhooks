@@ -52,6 +52,24 @@ services:
     region: oregon
 
   - type: cron
+    name: dealsauce-buyer-sync
+    runtime: python
+    schedule: "0 13 * * *"   # 6 AM PT daily (UTC-7 summer / UTC-8 winter)
+    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
+    startCommand: python scripts/dealsauce_scraper.py
+    envVars:
+      - key: DEALSAUCE_EMAIL
+        sync: false
+      - key: DEALSAUCE_PASSWORD
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+    plan: free
+    region: oregon
+
+  - type: cron
     name: surplus-call-trigger
     runtime: python
     schedule: "0 16 * * 1-5"   # 9 AM PT Mon–Fri (UTC-7 summer / UTC-8 winter — use 16:00 UTC for safety)

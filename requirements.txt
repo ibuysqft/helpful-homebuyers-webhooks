@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 APScheduler==3.10.4
 SQLAlchemy==2.0.36
 supabase==2.10.0
+anthropic

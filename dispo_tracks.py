@@ -548,13 +548,24 @@ def handle_dispo_reply(contact_id: str, message: str, deal_id: str) -> dict:
     opp_id = find_dispo_opp(contact_id)
     deal_data = get_deal_data(deal_id)
 
-    # Record response in dispo_blasts
+    # Record response in dispo_blasts and trigger grade recalc
     try:
         sb = _get_sb()
-        sb.table("dispo_blasts").update({
-            "response":    message,
-            "outcome":     sentiment,
-        }).eq("deal_opportunity_id", deal_id).eq("ghl_contact_id", contact_id).execute()
+        updated = (
+            sb.table("dispo_blasts")
+            .update({"response": message, "outcome": sentiment})
+            .eq("deal_opportunity_id", deal_id)
+            .eq("ghl_contact_id", contact_id)
+            .select("buyer_id")
+            .execute()
+            .data
+        )
+        # Recalc buyer grade now that we have a new outcome
+        if updated:
+            buyer_id = updated[0].get("buyer_id")
+            if buyer_id:
+                from scripts.buyer_grader import recalc_buyer_grade
+                recalc_buyer_grade(str(buyer_id), sb)
     except Exception as exc:
         log.warning("Could not update dispo_blasts response contact=%s deal=%s: %s", contact_id, deal_id, exc)
 

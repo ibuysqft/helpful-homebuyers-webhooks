@@ -2,8 +2,21 @@
 """
 DealSauce cash buyer scraper.
 
-Logs into app.dealsauce.io, paginates through the buyer list,
-and upserts every buyer into Supabase cash_buyers.
+Logs into app.dealsauce.io, navigates to the property search to initialize
+the search.dealsauce.io SSO session, then calls POST /publy/leads with
+leadTypes=["cash buyer"] via an in-page fetch. Upserts every owner record
+into Supabase cash_buyers.
+
+Architecture notes:
+- DealSauce is a white-label of Realeflow / Housefolios.
+- Property search lives in an iframe: app.dealsauce.io/property-search
+  → iframe src: search.dealsauce.io/Account/Account/LogOnWithToken?...
+- Auth uses HttpOnly session cookies (not visible to JS). The token in the
+  iframe URL performs the SSO exchange that sets search.dealsauce.io cookies.
+- After iframe load, any page in the same browser context can call
+  search.dealsauce.io APIs via fetch() with credentials: 'include'.
+- Owner phone/email requires skip-trace credits (0 on current account).
+  Records without email or phone are stored by mailing address.
 
 Usage:
     python scripts/dealsauce_scraper.py
@@ -15,9 +28,11 @@ Credentials (from ~/.hhb/credentials.env):
     SUPABASE_KEY
 """
 import asyncio
+import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
@@ -37,15 +52,15 @@ DEALSAUCE_PASSWORD = os.environ.get("DEALSAUCE_PASSWORD", "")
 SUPABASE_URL       = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY       = os.environ.get("SUPABASE_KEY", "")
 
-LOGIN_URL  = "https://app.dealsauce.io/login"
-BUYERS_URL = "https://app.dealsauce.io/buyers"
+LOGIN_URL          = "https://app.dealsauce.io/signin"
+PROPERTY_SEARCH_URL = "https://app.dealsauce.io/property-search"
+SEARCH_API_URL     = "https://search.dealsauce.io/publy/leads"
+PAGE_SIZE          = 25
 
-# CSS selectors — update after inspecting the live page if these don't match
-SEL_EMAIL_INPUT    = "input[type='email'], input[name='email']"
-SEL_PASSWORD_INPUT = "input[type='password'], input[name='password']"
-SEL_SUBMIT_BUTTON  = "button[type='submit']"
-SEL_BUYER_ROW      = ".buyer-card, tr.buyer-row, [data-testid='buyer-row'], tbody tr"
-SEL_NEXT_PAGE      = "button[aria-label='Next page'], a.pagination-next, .next-page, [data-testid='next-page']"
+# Login form selectors (confirmed against live page — MUI text input, not email type)
+SEL_EMAIL_INPUT    = 'input[placeholder="Email Address"]'
+SEL_PASSWORD_INPUT = 'input[type="password"]'
+SEL_SUBMIT_BUTTON  = 'button[type="submit"]'
 
 log = logging.getLogger("dealsauce_scraper")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -80,81 +95,144 @@ def _parse_cities(raw: str) -> list:
     return [s.strip() for s in raw.replace(";", ",").split(",") if s.strip()]
 
 
-async def _get_text(page, row, *selectors: str) -> str:
-    """Try each selector against the row element; return first non-empty result."""
-    for sel in selectors:
-        try:
-            el = await row.query_selector(sel)
-            if el:
-                text = await el.inner_text()
-                if text and text.strip():
-                    return text.strip()
-        except Exception:
-            continue
-    return ""
-
-
 async def _login(page) -> None:
-    log.info("Navigating to login page…")
+    log.info("Navigating to login page: %s", LOGIN_URL)
     await page.goto(LOGIN_URL, wait_until="domcontentloaded")
+    await asyncio.sleep(1)  # allow MUI inputs to mount
+
     await page.fill(SEL_EMAIL_INPUT, DEALSAUCE_EMAIL)
     await page.fill(SEL_PASSWORD_INPUT, DEALSAUCE_PASSWORD)
     await page.click(SEL_SUBMIT_BUTTON)
-    # Wait for redirect away from /login
+
+    # Wait for redirect away from /signin
     await page.wait_for_function(
-        "() => !window.location.pathname.includes('/login')",
-        timeout=15_000,
+        "() => !window.location.pathname.includes('/signin')",
+        timeout=20_000,
     )
     log.info("Login successful — now at %s", page.url)
 
 
-async def _scrape_page(page) -> list:
-    """Extract buyer records from the current page."""
-    await page.wait_for_selector(SEL_BUYER_ROW, timeout=10_000)
-    rows = await page.query_selector_all(SEL_BUYER_ROW)
+async def _init_sso_session(context, main_page) -> None:
+    """
+    Navigate to /property-search so the iframe performs the SSO token exchange,
+    setting session cookies on search.dealsauce.io for the entire browser context.
+    """
+    log.info("Initializing search.dealsauce.io SSO session via property-search iframe…")
+    await main_page.goto(PROPERTY_SEARCH_URL, wait_until="domcontentloaded", timeout=30_000)
 
-    buyers = []
-    for row in rows:
-        first_name = await _get_text(page, row, ".first-name", "[data-field='firstName']", "td:nth-child(1)")
-        last_name  = await _get_text(page, row, ".last-name",  "[data-field='lastName']",  "td:nth-child(2)")
-        email      = await _get_text(page, row, ".email",      "[data-field='email']",      "td:nth-child(3)")
-        phone      = await _get_text(page, row, ".phone",      "[data-field='phone']",      "td:nth-child(4)")
-        company    = await _get_text(page, row, ".company",    "[data-field='company']",    "td:nth-child(5)")
-        price_min  = await _get_text(page, row, ".price-min",  "[data-field='priceMin']",   "td:nth-child(6)")
-        price_max  = await _get_text(page, row, ".price-max",  "[data-field='priceMax']",   "td:nth-child(7)")
-        markets    = await _get_text(page, row, ".markets",    "[data-field='markets']",    "td:nth-child(8)")
-        states     = await _get_text(page, row, ".states",     "[data-field='states']",     "td:nth-child(9)")
+    # Wait for the iframe element — it carries the SSO token URL
+    try:
+        await main_page.wait_for_selector("iframe", timeout=20_000)
+    except PlaywrightTimeout:
+        log.warning("No iframe found on property-search — SSO may have failed")
+        return
 
-        email = email.lower().strip()
-        phone = phone.strip()
-
-        if not email and not phone:
-            log.warning("Skipping buyer with no email or phone: %s %s", first_name, last_name)
-            continue
-
-        buyers.append({
-            "first_name":       first_name or None,
-            "last_name":        last_name or None,
-            "email":            email or None,
-            "phone":            phone or None,
-            "company":          company or None,
-            "price_range_min":  _parse_price(price_min) if price_min else None,
-            "price_range_max":  _parse_price(price_max) if price_max else None,
-            "preferred_cities": _parse_cities(markets) if markets else [],
-            "preferred_states": _parse_states(states) if states else [],
-            "status":           "active",
-        })
-
-    return buyers
+    # Give the iframe time to navigate and set cookies on search.dealsauce.io
+    await asyncio.sleep(4)
+    log.info("SSO iframe loaded — search.dealsauce.io session cookies should now be set")
 
 
-async def _has_next_page(page) -> bool:
-    btn = await page.query_selector(SEL_NEXT_PAGE)
-    if not btn:
-        return False
-    disabled = await btn.get_attribute("disabled")
-    aria_disabled = await btn.get_attribute("aria-disabled")
-    return disabled is None and aria_disabled != "true"
+def _build_payload(page_num: int, cursor=None) -> dict:
+    return {
+        "filterProperties": {
+            "places": [],
+            "leadTypes": ["cash buyer"],
+            "propertyMainCategory": "residential",
+            "propertyTypes": {},
+            "includeAllLeadTypes": False,
+        },
+        "pagination": {
+            "pageSize": PAGE_SIZE,
+            "page": page_num,
+            "cursor": cursor,
+        },
+        "sessionId": int(time.time() * 1000),
+        "order": {"field": "distance", "direction": "asc"},
+        "selection": {"includeAll": False, "include": [], "exclude": [], "count": 0},
+        "export": {"type": None, "format": None},
+    }
+
+
+async def _fetch_page(search_page, page_num: int, cursor=None) -> dict:
+    """
+    Call POST /publy/leads from within the search.dealsauce.io page context.
+    HttpOnly session cookies are included automatically via credentials: 'include'.
+    """
+    payload = _build_payload(page_num, cursor)
+    result = await search_page.evaluate(
+        """
+        async (payload) => {
+            const resp = await fetch('/publy/leads', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
+            }
+            return await resp.json();
+        }
+        """,
+        payload,
+    )
+    return result
+
+
+def _record_to_buyer(rec: dict) -> dict | None:
+    """
+    Map a /publy/leads record to a cash_buyers row.
+
+    Available without skip-trace credits:
+      firstName, lastName, mailingAddress, mailingCity, mailingState, mailingZipCode
+    Requires credits (not available on current account):
+      phone, email (under rec['contacts'])
+    """
+    first_name = (rec.get("firstName") or "").strip()
+    last_name  = (rec.get("lastName")  or "").strip()
+
+    contacts = rec.get("contacts") or []
+    email = next(
+        (c.get("email", "").lower().strip() for c in contacts if c.get("email")),
+        None,
+    )
+    phone = next(
+        (c.get("phone", "").strip() for c in contacts if c.get("phone")),
+        None,
+    )
+
+    mailing_address = (rec.get("mailingAddress") or "").strip()
+    mailing_city    = (rec.get("mailingCity")    or "").strip()
+    mailing_state   = (rec.get("mailingState")   or "").strip().upper()
+    mailing_zip     = (rec.get("mailingZipCode") or "").strip()
+
+    # Skip records with no identity whatsoever
+    if not email and not phone and not mailing_address:
+        return None
+
+    state_from_mailing = [mailing_state] if mailing_state else []
+
+    return {
+        "first_name":        first_name or None,
+        "last_name":         last_name  or None,
+        "email":             email or None,
+        "phone":             phone or None,
+        "mailing_address":   mailing_address or None,
+        "mailing_city":      mailing_city or None,
+        "mailing_state":     mailing_state or None,
+        "mailing_zip":       mailing_zip or None,
+        "preferred_states":  state_from_mailing,
+        "status":            "active",
+        "source":            "dealsauce",
+        # Default scoring — upgraded to internal history once deal_count >= 1
+        "score":             50,
+        "score_source":      "dealsauce_import",
+        "grade":             "D",
+    }
 
 
 async def scrape_all_buyers() -> list:
@@ -170,29 +248,55 @@ async def scrape_all_buyers() -> list:
             browser = await pw.chromium.launch(headless=True)
 
         context = await browser.new_context()
-        page    = await context.new_page()
+        main_page = await context.new_page()
 
-        await _login(page)
-        await page.goto(BUYERS_URL, wait_until="domcontentloaded")
+        await _login(main_page)
+        await _init_sso_session(context, main_page)
+
+        # Open a new page on search.dealsauce.io to make API calls in its context
+        search_page = await context.new_page()
+        await search_page.goto(
+            "https://search.dealsauce.io/Marketing/Leads",
+            wait_until="domcontentloaded",
+            timeout=20_000,
+        )
+        await asyncio.sleep(2)
 
         page_num = 1
-        while True:
-            log.info("Scraping page %d…", page_num)
+        cursor = None
+        has_next = True
+
+        while has_next:
+            log.info("Fetching cash buyer page %d (cursor=%s)…", page_num, cursor)
             try:
-                page_buyers = await _scrape_page(page)
-            except PlaywrightTimeout:
-                log.warning("Timed out on page %d — committing scraped so far", page_num)
+                data = await _fetch_page(search_page, page_num, cursor)
+            except Exception as exc:
+                log.error("API call failed on page %d: %s", page_num, exc)
                 break
 
-            buyers.extend(page_buyers)
-            log.info("  Page %d: %d buyers (total: %d)", page_num, len(page_buyers), len(buyers))
-
-            if not await _has_next_page(page):
+            records = data.get("list") or data.get("results") or data.get("data") or []
+            if not records:
+                log.warning("Empty result on page %d — stopping", page_num)
                 break
 
-            await page.click(SEL_NEXT_PAGE)
-            await page.wait_for_load_state("networkidle", timeout=10_000)
-            page_num += 1
+            for rec in records:
+                buyer = _record_to_buyer(rec)
+                if buyer:
+                    buyers.append(buyer)
+
+            pagination = data.get("paginationData") or {}
+            has_next = pagination.get("hasNextPage", False)
+            cursor_obj = data.get("cursor")
+            cursor = cursor_obj if cursor_obj else None
+
+            log.info(
+                "  Page %d: %d records (total so far: %d, hasNext=%s)",
+                page_num, len(records), len(buyers), has_next,
+            )
+
+            if has_next:
+                page_num += 1
+                await asyncio.sleep(0.5)  # light rate limiting
 
         await context.close()
 
@@ -200,20 +304,28 @@ async def scrape_all_buyers() -> list:
 
 
 def upsert_buyers(buyers: list) -> tuple:
-    """Upsert all buyers into Supabase cash_buyers. Returns (added, skipped)."""
+    """Upsert buyers into Supabase cash_buyers. Returns (added, skipped)."""
     sb = create_client(SUPABASE_URL, SUPABASE_KEY)
     added = skipped = 0
 
     for buyer in buyers:
-        conflict_col = "email" if buyer.get("email") else "phone"
-        if not buyer.get(conflict_col):
+        # Prefer email, then phone, then mailing address as conflict key
+        if buyer.get("email"):
+            conflict_col = "email"
+        elif buyer.get("phone"):
+            conflict_col = "phone"
+        elif buyer.get("mailing_address"):
+            conflict_col = "mailing_address"
+        else:
             skipped += 1
             continue
+
         try:
             sb.table("cash_buyers").upsert(buyer, on_conflict=conflict_col).execute()
             added += 1
         except Exception as exc:
-            log.error("Upsert failed for %s: %s", buyer.get("email") or buyer.get("phone"), exc)
+            key = buyer.get("email") or buyer.get("phone") or buyer.get("mailing_address")
+            log.error("Upsert failed for %s: %s", key, exc)
             skipped += 1
 
     return added, skipped
@@ -231,11 +343,17 @@ async def main():
     buyers = await scrape_all_buyers()
 
     if not buyers:
-        log.warning("No buyers scraped — check selectors or login credentials.")
+        log.warning(
+            "No buyers scraped. Possible causes:\n"
+            "  1. Login failed — check DEALSAUCE_EMAIL / DEALSAUCE_PASSWORD\n"
+            "  2. SSO iframe did not load — network issue\n"
+            "  3. API response format changed — check /publy/leads response keys\n"
+            "  4. Account has 0 skip-trace credits — only mailing_address will be populated"
+        )
         sys.exit(1)
 
     added, skipped = upsert_buyers(buyers)
-    print(f"DealSauce scraper complete: {added} upserted, {skipped} skipped (no email/phone)")
+    print(f"DealSauce scraper complete: {added} upserted, {skipped} skipped")
 
 
 if __name__ == "__main__":
