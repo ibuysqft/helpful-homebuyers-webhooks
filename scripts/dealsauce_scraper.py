@@ -2,21 +2,19 @@
 """
 DealSauce cash buyer scraper.
 
-Logs into app.dealsauce.io, navigates to the property search to initialize
-the search.dealsauce.io SSO session, then calls POST /publy/leads with
-leadTypes=["cash buyer"] via an in-page fetch. Upserts every owner record
-into Supabase cash_buyers.
+Daily flow:
+  1. Log into app.dealsauce.io
+  2. Trigger a new cash-buyer export via POST /publy/leads (export mode)
+  3. Poll /publy/csv_exports/{id} until status == FINISHED (up to 10 min)
+  4. Download the ZIP from /publy/export/{id}/download
+  5. Extract CSV, map rows → cash_buyers, upsert into Supabase
 
 Architecture notes:
 - DealSauce is a white-label of Realeflow / Housefolios.
 - Property search lives in an iframe: app.dealsauce.io/property-search
-  → iframe src: search.dealsauce.io/Account/Account/LogOnWithToken?...
-- Auth uses HttpOnly session cookies (not visible to JS). The token in the
-  iframe URL performs the SSO exchange that sets search.dealsauce.io cookies.
-- After iframe load, any page in the same browser context can call
-  search.dealsauce.io APIs via fetch() with credentials: 'include'.
-- Owner phone/email requires skip-trace credits (0 on current account).
-  Records without email or phone are stored by mailing address.
+  → iframe src: search.dealsauce.io — auth uses HttpOnly session cookies.
+- The live /publy/leads search API requires geolocation and returns 0
+  results when called without a map center. Export mode works without it.
 
 Usage:
     python scripts/dealsauce_scraper.py
@@ -25,14 +23,16 @@ Credentials (from ~/.hhb/credentials.env):
     DEALSAUCE_EMAIL
     DEALSAUCE_PASSWORD
     SUPABASE_URL
-    SUPABASE_KEY
+    SUPABASE_KEY  (or SUPABASE_SERVICE_ROLE_KEY)
 """
 import asyncio
-import json
+import csv
+import io
 import logging
 import os
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
@@ -50,90 +50,124 @@ if _CREDS_FILE.exists():
 DEALSAUCE_EMAIL    = os.environ.get("DEALSAUCE_EMAIL", "")
 DEALSAUCE_PASSWORD = os.environ.get("DEALSAUCE_PASSWORD", "")
 SUPABASE_URL       = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY       = os.environ.get("SUPABASE_KEY", "")
+# Accept either key name
+SUPABASE_KEY       = (
+    os.environ.get("SUPABASE_KEY")
+    or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+)
 
 LOGIN_URL          = "https://app.dealsauce.io/signin"
 PROPERTY_SEARCH_URL = "https://app.dealsauce.io/property-search"
-SEARCH_API_URL     = "https://search.dealsauce.io/publy/leads"
-PAGE_SIZE          = 25
+SEARCH_BASE        = "https://search.dealsauce.io"
 
-# Login form selectors (confirmed against live page — MUI text input, not email type)
 SEL_EMAIL_INPUT    = 'input[placeholder="Email Address"]'
 SEL_PASSWORD_INPUT = 'input[type="password"]'
 SEL_SUBMIT_BUTTON  = 'button[type="submit"]'
+
+EXPORT_POLL_INTERVAL = 10   # seconds between status polls
+EXPORT_POLL_MAX      = 60   # max attempts (10 min)
 
 log = logging.getLogger("dealsauce_scraper")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 
-def _parse_price(raw: str) -> float:
-    """Parse '$1.2M', '$850K', '1200000' → float. Returns 0.0 on parse failure."""
-    s = raw.replace("$", "").replace(",", "").strip().upper()
-    if s.endswith("M"):
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _first(*vals) -> str | None:
+    return next((v.strip() for v in vals if (v or "").strip()), None)
+
+
+def _extract_csv(raw: bytes) -> str:
+    """Unzip raw bytes and decode the CSV inside."""
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        name = next(n for n in zf.namelist() if n.endswith(".csv"))
+        data = zf.read(name)
+    for enc in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
         try:
-            return float(s[:-1]) * 1_000_000
-        except ValueError:
-            return 0.0
-    if s.endswith("K"):
-        try:
-            return float(s[:-1]) * 1_000
-        except ValueError:
-            return 0.0
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
+            return data.decode(enc).replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("Cannot decode CSV from ZIP")
 
 
-def _parse_states(raw: str) -> list:
-    """'CA, TX, FL' → ['CA', 'TX', 'FL']"""
-    return [s.strip().upper() for s in raw.replace(";", ",").split(",") if s.strip()]
+def _row_to_buyer(row: dict) -> dict | None:
+    """Map a DealSauce CSV row to a cash_buyers upsert payload."""
+    email = _first(
+        row.get("Contact1Email_1"),
+        row.get("Contact1Email_2"),
+        row.get("Contact1Email_3"),
+    )
+    if email:
+        email = email.lower()
+
+    phone = _first(
+        row.get("Contact1Phone_1"),
+        row.get("Contact1Phone_2"),
+        row.get("Contact1Phone_3"),
+    )
+
+    mailing_addr  = _first(row.get("RecipientAddress"))
+    mailing_city  = _first(row.get("RecipientCity"))
+    mailing_state = (row.get("RecipientState") or "").strip().upper() or None
+    mailing_zip   = _first(row.get("RecipientPostalCode"))
+
+    if not email and not phone and not mailing_addr:
+        return None
+
+    return {
+        "first_name":       _first(row.get("FirstName")),
+        "last_name":        _first(row.get("LastName")),
+        "email":            email,
+        "phone":            phone,
+        "mailing_address":  mailing_addr,
+        "mailing_city":     mailing_city,
+        "mailing_state":    mailing_state,
+        "mailing_zip":      mailing_zip,
+        "preferred_states": [mailing_state] if mailing_state else [],
+        "status":           "active",
+        "source":           "dealsauce",
+        # Default scoring — upgraded from internal history once deal_count >= 1
+        "score":            50,
+        "score_source":     "dealsauce_import",
+        "grade":            "D",
+    }
 
 
-def _parse_cities(raw: str) -> list:
-    """'Los Angeles, Houston' → ['Los Angeles', 'Houston']"""
-    return [s.strip() for s in raw.replace(";", ",").split(",") if s.strip()]
-
+# ── Playwright helpers ────────────────────────────────────────────────────────
 
 async def _login(page) -> None:
-    log.info("Navigating to login page: %s", LOGIN_URL)
+    log.info("Logging in to DealSauce…")
     await page.goto(LOGIN_URL, wait_until="domcontentloaded")
-    await asyncio.sleep(1)  # allow MUI inputs to mount
-
+    await asyncio.sleep(1)
     await page.fill(SEL_EMAIL_INPUT, DEALSAUCE_EMAIL)
     await page.fill(SEL_PASSWORD_INPUT, DEALSAUCE_PASSWORD)
     await page.click(SEL_SUBMIT_BUTTON)
-
-    # Wait for redirect away from /signin
     await page.wait_for_function(
         "() => !window.location.pathname.includes('/signin')",
         timeout=20_000,
     )
-    log.info("Login successful — now at %s", page.url)
+    log.info("Login successful — at %s", page.url)
 
 
-async def _init_sso_session(context, main_page) -> None:
-    """
-    Navigate to /property-search so the iframe performs the SSO token exchange,
-    setting session cookies on search.dealsauce.io for the entire browser context.
-    """
-    log.info("Initializing search.dealsauce.io SSO session via property-search iframe…")
-    await main_page.goto(PROPERTY_SEARCH_URL, wait_until="domcontentloaded", timeout=30_000)
-
-    # Wait for the iframe element — it carries the SSO token URL
+async def _init_sso(page) -> None:
+    """Load the property-search iframe to set search.dealsauce.io session cookies."""
+    log.info("Initializing SSO session via property-search iframe…")
+    await page.goto(PROPERTY_SEARCH_URL, wait_until="domcontentloaded", timeout=30_000)
     try:
-        await main_page.wait_for_selector("iframe", timeout=20_000)
+        await page.wait_for_selector("iframe", timeout=20_000)
     except PlaywrightTimeout:
-        log.warning("No iframe found on property-search — SSO may have failed")
+        log.warning("No iframe found — SSO may have failed")
         return
-
-    # Give the iframe time to navigate and set cookies on search.dealsauce.io
-    await asyncio.sleep(4)
-    log.info("SSO iframe loaded — search.dealsauce.io session cookies should now be set")
+    await asyncio.sleep(5)
+    log.info("SSO ready")
 
 
-def _build_payload(page_num: int, cursor=None) -> dict:
-    return {
+async def _trigger_export(ctx) -> str | None:
+    """
+    POST /publy/leads with export mode to kick off a new cash-buyer export.
+    Returns the export ID string, or None on failure.
+    """
+    payload = {
         "filterProperties": {
             "places": [],
             "leadTypes": ["cash buyer"],
@@ -141,218 +175,145 @@ def _build_payload(page_num: int, cursor=None) -> dict:
             "propertyTypes": {},
             "includeAllLeadTypes": False,
         },
-        "pagination": {
-            "pageSize": PAGE_SIZE,
-            "page": page_num,
-            "cursor": cursor,
-        },
+        "pagination": {"pageSize": 25, "page": 1, "cursor": None},
         "sessionId": int(time.time() * 1000),
-        "order": {"field": "distance", "direction": "asc"},
-        "selection": {"includeAll": False, "include": [], "exclude": [], "count": 0},
-        "export": {"type": None, "format": None},
+        "order": {"field": "lastSaleDate", "direction": "desc"},
+        "selection": {"includeAll": True, "include": [], "exclude": [], "count": 0},
+        "export": {"type": "leads", "format": "csv"},
     }
-
-
-async def _fetch_page(search_page, page_num: int, cursor=None) -> dict:
-    """
-    Call POST /publy/leads from within the search.dealsauce.io page context.
-    HttpOnly session cookies are included automatically via credentials: 'include'.
-    """
-    payload = _build_payload(page_num, cursor)
-    result = await search_page.evaluate(
-        """
-        async (payload) => {
-            const resp = await fetch('/publy/leads', {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                },
-                body: JSON.stringify(payload),
-            });
-            if (!resp.ok) {
-                const text = await resp.text();
-                throw new Error('HTTP ' + resp.status + ': ' + text.slice(0, 200));
-            }
-            return await resp.json();
-        }
-        """,
-        payload,
+    resp = await ctx.request.post(
+        f"{SEARCH_BASE}/publy/leads",
+        data=payload,
+        headers={"Content-Type": "application/json"},
     )
-    return result
-
-
-def _record_to_buyer(rec: dict) -> dict | None:
-    """
-    Map a /publy/leads record to a cash_buyers row.
-
-    Available without skip-trace credits:
-      firstName, lastName, mailingAddress, mailingCity, mailingState, mailingZipCode
-    Requires credits (not available on current account):
-      phone, email (under rec['contacts'])
-    """
-    first_name = (rec.get("firstName") or "").strip()
-    last_name  = (rec.get("lastName")  or "").strip()
-
-    contacts = rec.get("contacts") or []
-    email = next(
-        (c.get("email", "").lower().strip() for c in contacts if c.get("email")),
-        None,
-    )
-    phone = next(
-        (c.get("phone", "").strip() for c in contacts if c.get("phone")),
-        None,
-    )
-
-    mailing_address = (rec.get("mailingAddress") or "").strip()
-    mailing_city    = (rec.get("mailingCity")    or "").strip()
-    mailing_state   = (rec.get("mailingState")   or "").strip().upper()
-    mailing_zip     = (rec.get("mailingZipCode") or "").strip()
-
-    # Skip records with no identity whatsoever
-    if not email and not phone and not mailing_address:
+    if resp.status not in (200, 201, 202):
+        log.error("Export trigger failed: HTTP %d", resp.status)
         return None
 
-    state_from_mailing = [mailing_state] if mailing_state else []
-
-    return {
-        "first_name":        first_name or None,
-        "last_name":         last_name  or None,
-        "email":             email or None,
-        "phone":             phone or None,
-        "mailing_address":   mailing_address or None,
-        "mailing_city":      mailing_city or None,
-        "mailing_state":     mailing_state or None,
-        "mailing_zip":       mailing_zip or None,
-        "preferred_states":  state_from_mailing,
-        "status":            "active",
-        "source":            "dealsauce",
-        # Default scoring — upgraded to internal history once deal_count >= 1
-        "score":             50,
-        "score_source":      "dealsauce_import",
-        "grade":             "D",
-    }
+    body = await resp.json()
+    export_id = (
+        body.get("exportId")
+        or body.get("id")
+        or (body.get("export") or {}).get("id")
+    )
+    if export_id:
+        log.info("Export triggered: %s", export_id)
+    else:
+        log.warning("Export trigger response had no exportId: %s", str(body)[:200])
+    return export_id
 
 
-async def scrape_all_buyers() -> list:
-    buyers = []
-    cdp_endpoint = os.getenv("CDP_ENDPOINT", "http://localhost:9222")
+async def _poll_export(ctx, export_id: str) -> bool:
+    """Poll until the export status is FINISHED. Returns True on success."""
+    url = f"{SEARCH_BASE}/publy/csv_exports/{export_id}"
+    for attempt in range(EXPORT_POLL_MAX):
+        await asyncio.sleep(EXPORT_POLL_INTERVAL)
+        resp = await ctx.request.get(url)
+        if resp.status != 200:
+            log.warning("Poll attempt %d: HTTP %d", attempt + 1, resp.status)
+            continue
+        body = await resp.json()
+        status = body.get("status", "")
+        lead_count = body.get("leadCount", "?")
+        log.info("Poll %d/%d: status=%s leads=%s", attempt + 1, EXPORT_POLL_MAX, status, lead_count)
+        if status == "FINISHED":
+            return True
+        if status in ("FAILED", "ERROR"):
+            log.error("Export failed with status: %s", status)
+            return False
+    log.error("Export timed out after %d polls", EXPORT_POLL_MAX)
+    return False
 
-    async with async_playwright() as pw:
-        try:
-            browser = await pw.chromium.connect_over_cdp(cdp_endpoint)
-            log.info("Connected to existing Chrome via CDP at %s", cdp_endpoint)
-        except Exception:
-            log.info("No CDP at %s — launching new Chromium", cdp_endpoint)
-            browser = await pw.chromium.launch(headless=True)
 
-        context = await browser.new_context()
-        main_page = await context.new_page()
+async def _download_export(ctx, export_id: str) -> bytes | None:
+    """Download the ZIP from /publy/export/{id}/download."""
+    url = f"{SEARCH_BASE}/publy/export/{export_id}/download"
+    resp = await ctx.request.get(url)
+    if resp.status != 200:
+        log.error("Download failed: HTTP %d", resp.status)
+        return None
+    raw = await resp.body()
+    log.info("Downloaded %d bytes for export %s", len(raw), export_id)
+    return raw
 
-        await _login(main_page)
-        await _init_sso_session(context, main_page)
 
-        # Open a new page on search.dealsauce.io to make API calls in its context
-        search_page = await context.new_page()
-        await search_page.goto(
-            "https://search.dealsauce.io/Marketing/Leads",
-            wait_until="domcontentloaded",
-            timeout=20_000,
-        )
-        await asyncio.sleep(2)
-
-        page_num = 1
-        cursor = None
-        has_next = True
-
-        while has_next:
-            log.info("Fetching cash buyer page %d (cursor=%s)…", page_num, cursor)
-            try:
-                data = await _fetch_page(search_page, page_num, cursor)
-            except Exception as exc:
-                log.error("API call failed on page %d: %s", page_num, exc)
-                break
-
-            records = data.get("list") or data.get("results") or data.get("data") or []
-            if not records:
-                log.warning("Empty result on page %d — stopping", page_num)
-                break
-
-            for rec in records:
-                buyer = _record_to_buyer(rec)
-                if buyer:
-                    buyers.append(buyer)
-
-            pagination = data.get("paginationData") or {}
-            has_next = pagination.get("hasNextPage", False)
-            cursor_obj = data.get("cursor")
-            cursor = cursor_obj if cursor_obj else None
-
-            log.info(
-                "  Page %d: %d records (total so far: %d, hasNext=%s)",
-                page_num, len(records), len(buyers), has_next,
-            )
-
-            if has_next:
-                page_num += 1
-                await asyncio.sleep(0.5)  # light rate limiting
-
-        await context.close()
-
-    return buyers
-
+# ── Supabase upsert ───────────────────────────────────────────────────────────
 
 def upsert_buyers(buyers: list) -> tuple:
     """Upsert buyers into Supabase cash_buyers. Returns (added, skipped)."""
     sb = create_client(SUPABASE_URL, SUPABASE_KEY)
     added = skipped = 0
-
     for buyer in buyers:
-        # Prefer email, then phone, then mailing address as conflict key
-        if buyer.get("email"):
-            conflict_col = "email"
-        elif buyer.get("phone"):
-            conflict_col = "phone"
-        elif buyer.get("mailing_address"):
-            conflict_col = "mailing_address"
-        else:
-            skipped += 1
-            continue
-
+        col = (
+            "email" if buyer.get("email")
+            else "phone" if buyer.get("phone")
+            else "mailing_address"
+        )
         try:
-            sb.table("cash_buyers").upsert(buyer, on_conflict=conflict_col).execute()
+            sb.table("cash_buyers").upsert(buyer, on_conflict=col).execute()
             added += 1
         except Exception as exc:
             key = buyer.get("email") or buyer.get("phone") or buyer.get("mailing_address")
-            log.error("Upsert failed for %s: %s", key, exc)
+            log.debug("Upsert skipped %s: %s", key, str(exc)[:100])
             skipped += 1
-
     return added, skipped
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+async def scrape_and_load() -> tuple:
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        ctx = await browser.new_context()
+        page = await ctx.new_page()
+
+        await _login(page)
+        await _init_sso(page)
+
+        # Trigger new export
+        export_id = await _trigger_export(ctx)
+        if not export_id:
+            log.error("Could not trigger export — aborting")
+            await ctx.close()
+            return 0, 0
+
+        # Poll until done
+        ok = await _poll_export(ctx, export_id)
+        if not ok:
+            await ctx.close()
+            return 0, 0
+
+        # Download and parse
+        raw = await _download_export(ctx, export_id)
+        await ctx.close()
+
+    if not raw:
+        return 0, 0
+
+    csv_text = _extract_csv(raw)
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    log.info("CSV: %d rows", len(rows))
+
+    buyers = [b for r in rows if (b := _row_to_buyer(r)) is not None]
+    log.info("Mapped %d buyers", len(buyers))
+
+    if not buyers:
+        log.warning("No mappable buyers in export")
+        return 0, 0
+
+    return upsert_buyers(buyers)
 
 
 async def main():
     if not DEALSAUCE_EMAIL or not DEALSAUCE_PASSWORD:
-        log.error("DEALSAUCE_EMAIL and DEALSAUCE_PASSWORD must be set in ~/.hhb/credentials.env")
+        log.error("DEALSAUCE_EMAIL and DEALSAUCE_PASSWORD must be set")
         sys.exit(1)
     if not SUPABASE_URL or not SUPABASE_KEY:
-        log.error("SUPABASE_URL and SUPABASE_KEY must be set in ~/.hhb/credentials.env")
+        log.error("SUPABASE_URL and SUPABASE_KEY (or SUPABASE_SERVICE_ROLE_KEY) must be set")
         sys.exit(1)
 
     log.info("DealSauce scraper starting…")
-    buyers = await scrape_all_buyers()
-
-    if not buyers:
-        log.warning(
-            "No buyers scraped. Possible causes:\n"
-            "  1. Login failed — check DEALSAUCE_EMAIL / DEALSAUCE_PASSWORD\n"
-            "  2. SSO iframe did not load — network issue\n"
-            "  3. API response format changed — check /publy/leads response keys\n"
-            "  4. Account has 0 skip-trace credits — only mailing_address will be populated"
-        )
-        sys.exit(1)
-
-    added, skipped = upsert_buyers(buyers)
+    added, skipped = await scrape_and_load()
     print(f"DealSauce scraper complete: {added} upserted, {skipped} skipped")
 
 
