@@ -10,7 +10,7 @@ services:
       - key: GHL_LOCATION_ID
         value: Jy8irfJWPVtq3vycsvx4
       - key: CALENDAR_ID
-        value: BqJ0rjqAFgh7VMJUvI5U
+        value: 2xJXutj4eTskFPYx8AeL
       - key: APPT_DURATION_MIN
         value: "30"
       - key: COMP_PULLER_URL
