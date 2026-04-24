@@ -89,42 +89,42 @@ AGENT_NAME_PHONE_MAP: dict[str, str] = {
 # {name} = contact first name, {address} = property address
 SMS_TEMPLATES: dict[str, Optional[str]] = {
     "Appointment Set": (
-        "Hey {name}! Shelby from Helpful Homebuyers. You're all set ✅ "
+        "Hey {name}! Shelby from Helpful Home Buyers USA. You're all set ✅ "
         "We'll go over your options for {address} and put together a real cash number for you. "
         "If anything changes, just reply here. Talk soon!"
     ),
     "Attorney Intro Agreed": (
-        "Hey {name}, Shelby from Helpful Homebuyers. "
+        "Hey {name}, Shelby from Helpful Home Buyers USA. "
         "Really appreciate you chatting today. We'll get our attorney connected with yours — "
         "we handle everything on our end. Any questions, just reply here."
     ),
     "Seeds Planted": (
-        "Hey {name}, Shelby from Helpful Homebuyers. "
+        "Hey {name}, Shelby from Helpful Home Buyers USA. "
         "Quick question — what would getting a fair cash offer on {address} this week actually mean for your situation? "
         "No repairs, no fees, we close on your timeline. Just reply and let me know."
     ),
     "Micro-Commitment": (
-        "Hey {name} — Shelby here. "
+        "Hey {name} — Shelby here with Helpful Home Buyers USA. "
         "Really glad we connected. We can move fast on {address} when you're ready. "
         "What's one thing that would need to happen for this to make sense for you? Just reply."
     ),
     "Interested - Reviewing": (
-        "Hey {name}, this is Shelby from Helpful Homebuyers. "
+        "Hey {name}, this is Shelby from Helpful Home Buyers USA. "
         "Take your time — we're not going anywhere. "
         "When you're ready to talk numbers on {address}, just reply and I'll get a cash offer to you same day."
     ),
     "Call Back Later": (
-        "Hey {name}, Shelby from Helpful Homebuyers. No worries at all — "
+        "Hey {name}, Shelby from Helpful Home Buyers USA. No worries at all — "
         "whenever the timing feels right, just reply here and we'll get moving. "
         "We close fast and handle everything."
     ),
     "Not Ready": (
-        "Hey {name}, this is Shelby from Helpful Homebuyers. "
+        "Hey {name}, this is Shelby from Helpful Home Buyers USA. "
         "Totally understand — no rush. When things change with {address}, "
         "just reply and we'll be ready. We can close in as little as 7 days when you are."
     ),
     "Voicemail": (
-        "Hey {name}, this is Shelby from Helpful Homebuyers. "
+        "Hey {name}, this is Shelby from Helpful Home Buyers USA. "
         "Left you a voicemail about {address}. We buy houses as-is for cash — no repairs, no fees. "
         "When's a good time to connect? Just reply here."
     ),
