@@ -101,6 +101,51 @@ class TestBookAppointmentNotify(unittest.TestCase):
         self.assertEqual(args[2], "Alice")
         self.assertEqual(args[3], "123 Main St")
 
+    @patch("main.resolve_calendar_route")
+    @patch("main._ghl_post")
+    @patch("main._ghl_get")
+    @patch("main._verify_contact")
+    @patch("main._send_followup_sms")
+    def test_booking_uses_routed_calendar(
+        self, mock_sms, mock_verify, mock_get, mock_post, mock_route
+    ):
+        """Successful booking must use the calendar resolved by the routing layer."""
+        from fastapi.testclient import TestClient
+        import main
+        from calendar_routing import CalendarRoute
+
+        mock_verify.return_value = True
+        mock_route.return_value = CalendarRoute(
+            mode="fixed_owner",
+            owner_key="jeffrey_bord",
+            owner_name="Jeffrey Bord",
+            calendar_id="route-cal-1",
+            location_id="loc-123",
+            selection_reason="fixed_owner_default",
+        )
+
+        contact_resp = MagicMock()
+        contact_resp.status_code = 200
+        contact_resp.json.return_value = {"contact": {"firstName": "Alice", "address1": "123 Main St"}}
+        mock_get.return_value = contact_resp
+
+        booking_resp = MagicMock()
+        booking_resp.status_code = 201
+        booking_resp.json.return_value = {"appointment": {"id": "appt-routed"}}
+        mock_post.return_value = booking_resp
+
+        client = TestClient(main.app)
+        resp = client.post("/shelby-book-appointment", json={
+            "contact_id": "contact-xyz",
+            "start_time": "2026-04-10T14:00:00Z",
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["calendarId"], "route-cal-1")
+        self.assertEqual(payload["locationId"], "loc-123")
+        self.assertEqual(resp.json()["calendar_owner_name"], "Jeffrey Bord")
+
     @patch("main._ghl_post")
     @patch("main._ghl_get")
     @patch("main._verify_contact")
@@ -133,6 +178,39 @@ class TestBookAppointmentNotify(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.json()["success"])
+
+
+class TestCheckCalendarRouting(unittest.TestCase):
+    @patch("main.resolve_calendar_route")
+    @patch("main._ghl_get")
+    def test_check_calendar_uses_routed_calendar(self, mock_get, mock_route):
+        from fastapi.testclient import TestClient
+        import main
+        from calendar_routing import CalendarRoute
+
+        mock_route.return_value = CalendarRoute(
+            mode="fixed_owner",
+            owner_key="jeffrey_bord",
+            owner_name="Jeffrey Bord",
+            calendar_id="route-cal-2",
+            location_id="loc-123",
+            selection_reason="fixed_owner_default",
+        )
+        slot_resp = MagicMock()
+        slot_resp.status_code = 200
+        slot_resp.json.return_value = {"_dates_": {"2026-04-10": [{"slots": [1775829600000]}]}}
+        mock_get.return_value = slot_resp
+
+        client = TestClient(main.app)
+        resp = client.post("/shelby-check-calendar", json={
+            "date": "2026-04-10",
+            "timezone": "America/Los_Angeles",
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(mock_get.call_args.args[0], "/calendars/route-cal-2/free-slots")
+        self.assertEqual(resp.json()["calendar_owner_name"], "Jeffrey Bord")
+        self.assertEqual(resp.json()["routing_mode"], "fixed_owner")
 
 
 class TestHealthLiveness(unittest.TestCase):

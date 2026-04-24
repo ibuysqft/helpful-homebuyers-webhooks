@@ -1,5 +1,5 @@
 """
-Helpful Homebuyers — Webhook Server v3
+Helpful Home Buyers USA — Webhook Server v3
 Handles all 4 Retell agents + full AI follow-up sequence system.
 
 Routes:
@@ -27,10 +27,10 @@ import pathlib
 GHL_API_KEY     = os.getenv("GHL_API_KEY", "")
 ADMIN_KEY       = os.getenv("ADMIN_KEY", "")
 GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
-CALENDAR_ID     = os.getenv("CALENDAR_ID", "BqJ0rjqAFgh7VMJUvI5U")
+CALENDAR_ID     = os.getenv("CALENDAR_ID", "2xJXutj4eTskFPYx8AeL")
 GHL_BASE        = "https://services.leadconnectorhq.com"
 
-# HHB On Market — Residential MLS (Marcus)
+# HHB On Market — Residential MLS (Claire)
 GHL_LOCATION_ID_ON_MARKET = "18Qc6ZWft7zdNY4oZUSm"
 MARCUS_AGENT_ID           = "agent_66939b0a2da6f2e37fe99edc54"
 
@@ -56,6 +56,7 @@ GHL_HEADERS = {
 
 # Map Retell call outcomes → GHL pipeline stage names
 from stage_map import STAGE_MAP
+from calendar_routing import resolve_calendar_route, routing_summary
 
 # Flags/urgency values that trigger escalation
 URGENT_FLAGS = {"urgent_under_14_days", "critical_-_under_14_days"}
@@ -66,11 +67,11 @@ VALID_AGENTS = {"shelby", "alex", "cole", "jordan", "marcus", "jenni"}
 AGENT_PHONE_MAP = {
     "agent_bde1f8ca91b3a63a42ecad9777": "+17036915670",  # Shelby inbound
     "agent_40da2f733e42df807a89c669d6": "+17036915670",  # Shelby outbound
-    "agent_636dd8ac10f4b633ab38bb001e": "+17038402238",  # Alex bankruptcy
-    "agent_e6cafef912272207148d11893f": "+17038402238",  # Alex bankruptcy alt
-    "agent_56e1def11bd5201bcdc1fedd6b": "+12133720548",  # Cole acquisitions
-    "agent_dd0928ae5479516c905c55ca4d": "+12134747691",  # Jordan estate
-    MARCUS_AGENT_ID: os.getenv("MARCUS_PHONE", ""),      # Marcus MLS On Market (set MARCUS_PHONE env var)
+    "agent_636dd8ac10f4b633ab38bb001e": "+17038402238",  # Harper bankruptcy
+    "agent_e6cafef912272207148d11893f": "+17038402238",  # Harper bankruptcy alt
+    "agent_56e1def11bd5201bcdc1fedd6b": "+12133720548",  # Riley acquisitions
+    "agent_dd0928ae5479516c905c55ca4d": "+12134747691",  # Brooke estate
+    MARCUS_AGENT_ID: os.getenv("MARCUS_PHONE", ""),      # Claire MLS On Market (set MARCUS_PHONE env var)
     JENNI_AGENT_ID:  JENNI_PHONE,                         # Jenni Commercial On Market
     REAGAN_AGENT_ID: REAGAN_PHONE,                        # Reagan Surplus Funds
 }
@@ -92,6 +93,25 @@ SMS_TEMPLATES: dict[str, Optional[str]] = {
         "Hey {name}! Shelby from Helpful Home Buyers USA. You're all set ✅ "
         "We'll go over your options for {address} and put together a real cash number for you. "
         "If anything changes, just reply here. Talk soon!"
+    ),
+    "Needs Human Offer Review": (
+        "Hey {name} — thanks for talking with us about {address}. "
+        "We have enough to get this in front of the team for a real review. "
+        "We'll circle back shortly with the cleanest next step."
+    ),
+    "Short Sale Review": (
+        "Hey {name} — we’re moving your file for {address} into short sale review now. "
+        "Our next step is to line up the lender/workout details and come back with the cleanest path. "
+        "If you get any bank notices, text them here."
+    ),
+    "Cash Offer Ready": (
+        "Hey {name} — we’ve got what we need on {address} to put together the cash path. "
+        "The team is reviewing it now and we’ll follow up with numbers shortly."
+    ),
+    "Novation Review": (
+        "Hey {name} — we’re reviewing the best retail-style exit for {address} now. "
+        "That means looking at how to preserve the most value without creating extra work for you. "
+        "We’ll come back with the cleanest option."
     ),
     "Attorney Intro Agreed": (
         "Hey {name}, Shelby from Helpful Home Buyers USA. "
@@ -129,7 +149,7 @@ SMS_TEMPLATES: dict[str, Optional[str]] = {
         "When's a good time to connect? Just reply here."
     ),
     "No Answer": (
-        "Hey {name}, Shelby from Helpful Homebuyers here. "
+        "Hey {name}, Shelby from Helpful Home Buyers USA here. "
         "Tried reaching you today about {address}. "
         "We buy homes as-is for cash and close fast. Is this still a good number? Reply YES."
     ),
@@ -147,6 +167,10 @@ SMS_TEMPLATES: dict[str, Optional[str]] = {
 OUTCOME_TAGS: dict[str, list[str]] = {
     "Appointment Set":        ["ai-followup-appointment", "ai-hot-lead"],
     "Attorney Intro Agreed":  ["ai-followup-appointment", "ai-hot-lead"],
+    "Needs Human Offer Review": ["ai-offer-review", "ai-warm-lead"],
+    "Short Sale Review":        ["ai-short-sale-review", "ai-warm-lead"],
+    "Cash Offer Ready":         ["ai-cash-offer", "ai-hot-lead"],
+    "Novation Review":          ["ai-novation-review", "ai-warm-lead"],
     "Seeds Planted":          ["ai-followup-hot", "ai-warm-lead"],
     "Micro-Commitment":       ["ai-followup-hot", "ai-warm-lead"],
     "Interested - Reviewing": ["ai-followup-hot", "ai-warm-lead"],
@@ -166,7 +190,7 @@ OUTCOME_TAGS: dict[str, list[str]] = {
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Helpful Homebuyers Webhooks", version="2.0.0")
+app = FastAPI(title="Helpful Home Buyers USA Webhooks", version="2.0.0")
 
 _STATIC_DIR = pathlib.Path(__file__).parent
 
@@ -332,7 +356,7 @@ def _apply_outcome_tags(contact_id: str, outcome: str) -> bool:
 
 @app.on_event("startup")
 async def startup_event():
-    log.info("Helpful Homebuyers Webhook Server v3 starting")
+    log.info("Helpful Home Buyers USA Webhook Server v3 starting")
     _load_pipeline_cache()
     from mls_tracks import start_scheduler
     start_scheduler()
@@ -412,6 +436,7 @@ def health():
         "checks":                 checks,
         "pipeline_stages_cached": sum(len(v) for v in _pipeline_cache.values()),
         "appt_duration_min":      APPT_DURATION_MIN,
+        "calendar_routing":       routing_summary(),
     }
 
     if not all_ok:
@@ -432,9 +457,20 @@ async def check_calendar(agent: str, request: Request):
     if not date:
         return JSONResponse({"error": "Missing: date"}, status_code=400)
 
+    try:
+        route = resolve_calendar_route(
+            agent_name=agent,
+            contact_id=body.get("contact_id"),
+            requested_calendar_id=body.get("calendar_id"),
+            requested_owner_key=body.get("routing_owner_key"),
+            mode_override=body.get("routing_mode"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
     start_ms, end_ms = _day_timestamps(date)
     r = _ghl_get(
-        f"/calendars/{CALENDAR_ID}/free-slots",
+        f"/calendars/{route.calendar_id}/free-slots",
         params={"startDate": start_ms, "endDate": end_ms, "timezone": tz},
     )
 
@@ -443,8 +479,24 @@ async def check_calendar(agent: str, request: Request):
         return JSONResponse({"error": "calendar unavailable"}, status_code=502)
 
     slots = _format_slots(r.json(), tz)
-    log.info("[%s] check-calendar %s → %d slots", agent, date, len(slots))
-    return {"available_slots": slots, "count": len(slots), "date": date}
+    log.info(
+        "[%s] check-calendar %s → %d slots via %s (%s)",
+        agent,
+        date,
+        len(slots),
+        route.owner_name,
+        route.calendar_id,
+    )
+    return {
+        "available_slots": slots,
+        "count": len(slots),
+        "date": date,
+        "calendar_id": route.calendar_id,
+        "calendar_owner_key": route.owner_key,
+        "calendar_owner_name": route.owner_name,
+        "routing_mode": route.mode,
+        "routing_reason": route.selection_reason,
+    }
 
 # ── Book appointment ──────────────────────────────────────────────────────────
 
@@ -456,7 +508,7 @@ async def book_appointment(agent: str, request: Request):
     body       = await request.json()
     contact_id = body.get("contact_id")
     start_time = body.get("start_time")
-    title      = body.get("title", "Helpful Homebuyers Consultation")
+    title      = body.get("title", "Helpful Home Buyers USA Consultation")
     notes      = body.get("notes", "")
 
     if not contact_id or not start_time:
@@ -468,6 +520,17 @@ async def book_appointment(agent: str, request: Request):
         return JSONResponse({"error": f"Contact {contact_id} not found in GHL"}, status_code=404)
 
     try:
+        route = resolve_calendar_route(
+            agent_name=agent,
+            contact_id=contact_id,
+            requested_calendar_id=body.get("calendar_id"),
+            requested_owner_key=body.get("routing_owner_key"),
+            mode_override=body.get("routing_mode"),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    try:
         start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
     except ValueError:
         return JSONResponse({"error": f"Invalid start_time: {start_time}"}, status_code=400)
@@ -475,8 +538,8 @@ async def book_appointment(agent: str, request: Request):
     end_dt = start_dt + timedelta(minutes=APPT_DURATION_MIN)
 
     payload = {
-        "calendarId":        CALENDAR_ID,
-        "locationId":        GHL_LOCATION_ID,
+        "calendarId":        route.calendar_id,
+        "locationId":        route.location_id,
         "contactId":         contact_id,
         "startTime":         start_dt.isoformat(),
         "endTime":           end_dt.isoformat(),
@@ -497,7 +560,15 @@ async def book_appointment(agent: str, request: Request):
 
     appt    = r.json().get("appointment", r.json())
     appt_id = appt.get("id")
-    log.info("[%s] booked %s for contact %s (%dmin)", agent, appt_id, contact_id, APPT_DURATION_MIN)
+    log.info(
+        "[%s] booked %s for contact %s (%dmin) via %s (%s)",
+        agent,
+        appt_id,
+        contact_id,
+        APPT_DURATION_MIN,
+        route.owner_name,
+        route.calendar_id,
+    )
 
     # ── Confirmation SMS (single GHL contact fetch for name + address) ────────
     _from_no = AGENT_NAME_PHONE_MAP.get(agent, "")
@@ -519,6 +590,10 @@ async def book_appointment(agent: str, request: Request):
         "appointment_id":     appt_id,
         "start_time_display": start_dt.strftime("%A, %B %-d at %-I:%M %p"),
         "duration_minutes":   APPT_DURATION_MIN,
+        "calendar_id":        route.calendar_id,
+        "calendar_owner_key": route.owner_key,
+        "calendar_owner_name": route.owner_name,
+        "routing_mode":       route.mode,
     }
 
 # ── Send SMS ──────────────────────────────────────────────────────────────────
