@@ -83,7 +83,7 @@ _scheduler = BackgroundScheduler(
 def start_scheduler() -> None:
     if not _scheduler.running:
         _scheduler.start()
-        log.info("Jenni track scheduler started (jobstore: %s)", JOBSTORE_PATH)
+        log.info("Jenni track scheduler started (jobstore: %s)", JOBSTORE_URL)
 
 
 def stop_scheduler() -> None:
