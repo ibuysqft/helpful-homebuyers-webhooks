@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 GHL_BASE        = "https://services.leadconnectorhq.com"
 GHL_API_KEY     = os.getenv("GHL_API_KEY", "")
-GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
+GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "")
 RETELL_BASE     = "https://api.retellai.com"
 RETELL_API_KEY  = os.getenv("RETELL_API_KEY", "")
 

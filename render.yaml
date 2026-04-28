@@ -8,7 +8,7 @@ services:
       - key: GHL_API_KEY
         sync: false   # set manually in Render dashboard — never commit the value
       - key: GHL_LOCATION_ID
-        value: Jy8irfJWPVtq3vycsvx4
+        sync: false
       - key: CALENDAR_ID
         value: 2xJXutj4eTskFPYx8AeL
       - key: CALENDAR_ROUTING_MODE
@@ -91,7 +91,7 @@ services:
       - key: GHL_API_KEY
         sync: false
       - key: GHL_LOCATION_ID
-        value: Jy8irfJWPVtq3vycsvx4
+        sync: false
       - key: RETELL_API_KEY
         sync: false
     plan: free

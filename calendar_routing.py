@@ -10,7 +10,7 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 DEFAULT_JEFFREY_CALENDAR_ID = "2xJXutj4eTskFPYx8AeL"
-DEFAULT_LOCATION_ID = "Jy8irfJWPVtq3vycsvx4"
+DEFAULT_LOCATION_ID = "your-ghl-location-id"
 DEFAULT_FIXED_OWNER_KEY = "jeffrey_bord"
 DEFAULT_FIXED_OWNER_NAME = "Jeffrey Bord"
 

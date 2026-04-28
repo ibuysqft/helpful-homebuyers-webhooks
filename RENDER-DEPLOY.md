@@ -29,8 +29,8 @@ The service is active, not suspended, and responding correctly. No redeployment 
 
 | Variable | Value |
 |----------|-------|
-| `GHL_API_KEY` | `pit-db848c79-dc09-4ba7-aadf-7a21db5f30d1` |
-| `GHL_LOCATION_ID` | `Jy8irfJWPVtq3vycsvx4` |
+| `GHL_API_KEY` | `your-ghl-api-key` |
+| `GHL_LOCATION_ID` | `your-ghl-location-id` |
 | `CALENDAR_ID` | `2xJXutj4eTskFPYx8AeL` |
 | `CALENDAR_ROUTING_MODE` | `fixed_owner` |
 | `CALENDAR_FIXED_OWNER_ID` | `2xJXutj4eTskFPYx8AeL` |
@@ -96,14 +96,14 @@ CALENDAR_REP_CONFIG_JSON='[
     "owner_key": "jeffrey_bord",
     "owner_name": "Jeffrey Bord",
     "calendar_id": "2xJXutj4eTskFPYx8AeL",
-    "location_id": "Jy8irfJWPVtq3vycsvx4",
+    "location_id": "your-ghl-location-id",
     "active": true
   },
   {
     "owner_key": "harper",
     "owner_name": "Harper",
     "calendar_id": "replace-with-ghl-calendar-id",
-    "location_id": "Jy8irfJWPVtq3vycsvx4",
+    "location_id": "your-ghl-location-id",
     "active": true
   }
 ]'

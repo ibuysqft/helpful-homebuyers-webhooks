@@ -55,14 +55,14 @@ CALENDAR_REP_CONFIG_JSON='[
     "owner_key": "jeffrey_bord",
     "owner_name": "Jeffrey Bord",
     "calendar_id": "2xJXutj4eTskFPYx8AeL",
-    "location_id": "Jy8irfJWPVtq3vycsvx4",
+    "location_id": "your-ghl-location-id",
     "active": true
   },
   {
     "owner_key": "harper",
     "owner_name": "Harper",
     "calendar_id": "replace-with-harper-calendar-id",
-    "location_id": "Jy8irfJWPVtq3vycsvx4",
+    "location_id": "your-ghl-location-id",
     "active": true
   }
 ]'

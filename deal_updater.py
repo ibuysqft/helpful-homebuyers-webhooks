@@ -7,7 +7,7 @@ import httpx, os
 router = APIRouter()
 
 GHL_API_KEY = os.getenv("GHL_API_KEY", "")
-GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
+GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "")
 GHL_BASE = "https://services.leadconnectorhq.com"
 
 # Pipeline stage name → stage ID mapping (use GHL API to look up if needed)

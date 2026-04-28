@@ -26,7 +26,7 @@ import pathlib
 # ── Config ────────────────────────────────────────────────────────────────────
 GHL_API_KEY     = os.getenv("GHL_API_KEY", "")
 ADMIN_KEY       = os.getenv("ADMIN_KEY", "")
-GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
+GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID", "")
 CALENDAR_ID     = os.getenv("CALENDAR_ID", "2xJXutj4eTskFPYx8AeL")
 GHL_BASE        = "https://services.leadconnectorhq.com"
 
@@ -35,7 +35,7 @@ GHL_LOCATION_ID_ON_MARKET = "18Qc6ZWft7zdNY4oZUSm"
 MARCUS_AGENT_ID           = "agent_66939b0a2da6f2e37fe99edc54"
 
 # Jenni Commercial On Market — Crexi/DealSauce (Jenni)
-GHL_LOCATION_ID_COMMERCIAL = os.getenv("GHL_LOCATION_ID", "Jy8irfJWPVtq3vycsvx4")
+GHL_LOCATION_ID_COMMERCIAL = os.getenv("GHL_LOCATION_ID", "")
 JENNI_AGENT_ID             = os.getenv("JENNI_AGENT_ID", "")
 JENNI_PHONE                = os.getenv("JENNI_PHONE", "")
 JENNI_CALENDAR_ID          = os.getenv("JENNI_CALENDAR_ID", "")
