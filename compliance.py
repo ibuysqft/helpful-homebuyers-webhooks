@@ -84,9 +84,9 @@ class ComplianceGate:
     @staticmethod
     def _get_field(contact: dict, key: str) -> str:
         """Extract a custom field value by bare key name (e.g. 'sms_consent')."""
-        for f in contact.get("customFields", []):
-            field_key = f.get("fieldKey", "")
+        for cf in contact.get("customFields", []):
+            field_key = cf.get("fieldKey", "")
             # GHL returns keys as "contact.field_name" — match on suffix
             if field_key == f"contact.{key}" or field_key == key:
-                return f.get("value", "")
+                return cf.get("value", "")
         return ""
