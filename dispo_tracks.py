@@ -49,7 +49,7 @@ POSITIVE_KEYWORDS = {"yes", "interested", "sure", "tell me more", "send it", "ca
 NEGATIVE_KEYWORDS = {"no", "not interested", "pass", "remove", "stop"}
 
 BLAST_SMS_TEMPLATE = (
-    "Hey {first_name}, it's Jenni with Helpful Homebuyers.\n"
+    "Hey {first_name}, it's Jenni with Helpful Home Buyers USA.\n"
     "We just locked up a {property_type} in {city}, {state} — "
     "{unit_count} units, {cap_rate} cap, asking {asking_price}.\n"
     "Fits your buy criteria. Interested in seeing the numbers?\n"
@@ -588,7 +588,7 @@ def handle_dispo_reply(contact_id: str, message: str, deal_id: str) -> dict:
     if sentiment == "unclear":
         _addr = deal_data.get("address") or "a property we're working on"
         clarification = (
-            f"Hey {buyer_name}! This is Jenni from Helpful Homebuyers. "
+            f"Hey {buyer_name}! This is Jenni from Helpful Home Buyers USA. "
             f"I reached out because we have a commercial deal at {_addr} "
             f"that might be a great fit for your buy criteria. "
             f"Are you open to hearing more details? Just reply YES and I'll send them over."

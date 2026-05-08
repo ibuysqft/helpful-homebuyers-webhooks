@@ -233,7 +233,7 @@ Write your SMS reply as {persona['name']} now."""
         return reply
     except Exception as exc:
         log.error("Reply generation failed: %s", exc)
-        return f"Hey {first_name}, this is {persona['name']} from Helpful Homebuyers. Just checking in — is now a good time to chat?"
+        return f"Hey {first_name}, this is {persona['name']} from Helpful Home Buyers USA. Just checking in — is now a good time to chat?"
 
 
 # ── Send SMS ───────────────────────────────────────────────────────────────────

@@ -82,7 +82,7 @@ _scheduler = BackgroundScheduler(
 def start_scheduler() -> None:
     if not _scheduler.running:
         _scheduler.start()
-        log.info("MLS track scheduler started (jobstore: %s)", JOBSTORE_PATH)
+        log.info("MLS track scheduler started (jobstore: %s)", JOBSTORE_URL)
 
 
 def stop_scheduler() -> None:
@@ -230,7 +230,7 @@ def _tpl(template: str, name: str, address: str) -> str:
 
 
 _TRACK_A_DAY2_NOTE = (
-    "Hey {name} — Marcus from Helpful Home Buyers. "
+    "Hey {name} — Blair from Helpful Home Buyers. "
     "Just following up on the offer we sent for {address}. "
     "Do you have any questions about the numbers? We're flexible and move fast. "
     "Let me know when's a good time to connect."
@@ -238,17 +238,17 @@ _TRACK_A_DAY2_NOTE = (
 
 _TRACK_B_SMS = {
     7: (
-        "Hey {name}, Marcus from Helpful Home Buyers. "
+        "Hey {name}, Blair from Helpful Home Buyers. "
         "Quick check-in on {address} — if the current deal falls through or you want a backup offer, "
         "we can move within 48 hours. Still interested? Just reply YES."
     ),
     21: (
-        "Hi {name}, Marcus here. Still thinking about {address}? "
+        "Hi {name}, Blair here. Still thinking about {address}? "
         "Market's been moving — I can get you updated comps and a refreshed offer this week. "
         "Want me to pull them? Reply YES."
     ),
     30: (
-        "Hey {name} — last check-in from Marcus at Helpful Home Buyers. "
+        "Hey {name} — last check-in from Blair at Helpful Home Buyers. "
         "We're still ready to close on {address} fast if your current deal changes. "
         "No pressure — just here when you need us. Reply anytime."
     ),
@@ -256,18 +256,18 @@ _TRACK_B_SMS = {
 
 _TRACK_C_SMS = {
     30: (
-        "Hi {name}, Marcus from Helpful Home Buyers. "
+        "Hi {name}, Blair from Helpful Home Buyers. "
         "Quick market update on your area — homes near {address} have been selling "
         "faster and at higher prices this month. Conditions may have changed since we last spoke. "
         "Want a current market analysis? Reply YES."
     ),
     60: (
-        "Hey {name} — Marcus from Helpful Home Buyers checking in. "
+        "Hey {name} — Blair from Helpful Home Buyers checking in. "
         "We helped another family near {address} close in 9 days last month — they were in a similar situation. "
         "If your plans have changed, we can move quickly. No obligation to chat. Reply and I'll reach out."
     ),
     90: (
-        "Hi {name}, this is Marcus from Helpful Home Buyers. "
+        "Hi {name}, this is Blair from Helpful Home Buyers. "
         "It's been 90 days since we connected about {address}. "
         "We're still buying in your area — same terms, fast close, no repairs needed. "
         "Is now a better time to talk? Just reply YES and I'll give you a call."
@@ -275,13 +275,13 @@ _TRACK_C_SMS = {
 }
 
 _TRACK_D_1HR_SMS = (
-    "Hey {name}, Marcus from Helpful Home Buyers. "
+    "Hey {name}, Blair from Helpful Home Buyers. "
     "Left you a voicemail about {address}. We buy homes as-is for cash — fast close, no fees. "
     "When's a good time to connect? Just reply here."
 )
 
 _TRACK_D_DAY4_SMS = (
-    "Hi {name} — Marcus from Helpful Home Buyers. "
+    "Hi {name} — Blair from Helpful Home Buyers. "
     "One last check-in about {address}. If you're not interested, no worries at all — just say the word. "
     "If timing changes or you want a cash offer, I'm one reply away. "
     "Hope things are going well!"
@@ -321,7 +321,7 @@ def _track_d_4hr_email_html(name: str, address: str) -> str:
       <table cellpadding="0" cellspacing="0">
         <tr>
           <td style="background:#10b981;border-radius:8px;padding:12px 24px;">
-            <a href="tel:+17039401159" style="color:#fff;font-size:14px;font-weight:700;text-decoration:none;">Call Marcus: (703) 940-1159</a>
+            <a href="tel:+17039401159" style="color:#fff;font-size:14px;font-weight:700;text-decoration:none;">Call Blair: (703) 940-1159</a>
           </td>
         </tr>
       </table>
@@ -330,7 +330,7 @@ def _track_d_4hr_email_html(name: str, address: str) -> str:
   <tr>
     <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 40px;">
       <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.6;">
-        Marcus — Helpful Home Buyers USA<br>
+        Blair — Helpful Home Buyers USA<br>
         <a href="https://helpfulhomebuyersusa.com" style="color:#10b981;">helpfulhomebuyersusa.com</a>
       </p>
     </td>

@@ -10,7 +10,17 @@ services:
       - key: GHL_LOCATION_ID
         value: Jy8irfJWPVtq3vycsvx4
       - key: CALENDAR_ID
-        value: BqJ0rjqAFgh7VMJUvI5U
+        value: 2xJXutj4eTskFPYx8AeL
+      - key: CALENDAR_ROUTING_MODE
+        value: fixed_owner
+      - key: CALENDAR_FIXED_OWNER_ID
+        value: 2xJXutj4eTskFPYx8AeL
+      - key: CALENDAR_FIXED_OWNER_KEY
+        value: jeffrey_bord
+      - key: CALENDAR_FIXED_OWNER_NAME
+        value: Jeffrey Bord
+      - key: CALENDAR_REP_CONFIG_JSON
+        sync: false   # JSON array for future round-robin reps; leave blank while Jeffrey is the only owner
       - key: APPT_DURATION_MIN
         value: "30"
       - key: COMP_PULLER_URL

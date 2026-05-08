@@ -83,7 +83,7 @@ _scheduler = BackgroundScheduler(
 def start_scheduler() -> None:
     if not _scheduler.running:
         _scheduler.start()
-        log.info("Jenni track scheduler started (jobstore: %s)", JOBSTORE_PATH)
+        log.info("Jenni track scheduler started (jobstore: %s)", JOBSTORE_URL)
 
 
 def stop_scheduler() -> None:
@@ -247,7 +247,7 @@ _TRACK_A_DAY3_SMS = (
 
 # Track B — cash offer interest
 _TRACK_B_IMMEDIATE_SMS = (
-    "Hey {name} — Jenni from Helpful Homebuyers! Great talking with you about {address}. "
+    "Hey {name} — Jenni from Helpful Home Buyers USA! Great talking with you about {address}. "
     "I'm running the cash MAO now — I'll have a number to you within the hour. "
     "Just need the current NOI if you have it handy. Anything missing from what we discussed?"
 )
@@ -268,7 +268,7 @@ _TRACK_C_DAY3_SMS = (
 
 # Track D — financials needed
 _TRACK_D_IMMEDIATE_SMS = (
-    "Hey {name} — Jenni from Helpful Homebuyers! Great talking with you about {address}. "
+    "Hey {name} — Jenni from Helpful Home Buyers USA! Great talking with you about {address}. "
     "To build the full offer package I just need:\n\n"
     "1. Current annual NOI (or gross rents + vacancy/expense breakdown)\n"
     "2. Current occupancy rate\n"
@@ -285,7 +285,7 @@ _TRACK_E_DAY3_SMS = (
 
 # Track F — already in escrow
 _TRACK_F_DAY21_SMS = (
-    "Hey {name} — Jenni from Helpful Homebuyers checking in on {address}. "
+    "Hey {name} — Jenni from Helpful Home Buyers USA checking in on {address}. "
     "Hope your current deal is moving smoothly! "
     "If anything changes on timing or terms, we're still very interested — "
     "full price, quick close. No pressure, just wanted to stay on your radar. — Jenni"
@@ -307,7 +307,7 @@ def _sf_offer_email_html(broker_name: str, address: str, asking_price: str, noi:
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#1e293b;border-radius:12px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,.4);">
   <tr>
     <td style="background:linear-gradient(135deg,#1e3a5f 0%,#1e293b 100%);padding:32px 40px;border-bottom:1px solid #334155;">
-      <p style="margin:0 0 6px;color:#64748b;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.12em;">Helpful Homebuyers — Commercial Division</p>
+      <p style="margin:0 0 6px;color:#64748b;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.12em;">Helpful Home Buyers USA — Commercial Division</p>
       <h1 style="margin:0;color:#f1f5f9;font-size:22px;font-weight:700;">Seller Finance Proposal</h1>
       <p style="margin:8px 0 0;color:#94a3b8;font-size:13px;">{address}</p>
     </td>
@@ -393,7 +393,7 @@ def _dual_offer_email_html(broker_name: str, address: str, asking_price: str, no
 <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#1e293b;border-radius:12px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,.4);">
   <tr>
     <td style="background:linear-gradient(135deg,#1e3a5f 0%,#1e293b 100%);padding:32px 40px;border-bottom:1px solid #334155;">
-      <p style="margin:0 0 6px;color:#64748b;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.12em;">Helpful Homebuyers — Commercial Division</p>
+      <p style="margin:0 0 6px;color:#64748b;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.12em;">Helpful Home Buyers USA — Commercial Division</p>
       <h1 style="margin:0;color:#f1f5f9;font-size:22px;font-weight:700;">Two Paths for Your Seller</h1>
       <p style="margin:8px 0 0;color:#94a3b8;font-size:13px;">{address}</p>
     </td>
