@@ -274,3 +274,18 @@ COMMENT ON TABLE dispo_blasts IS
 
 CREATE INDEX idx_dispo_blasts_ghl_contact ON dispo_blasts (ghl_contact_id);
 CREATE INDEX idx_dispo_blasts_deal        ON dispo_blasts (deal_opportunity_id);
+
+
+-- ---------------------------------------------------------------------------
+-- 8. opt_outs — checked before every outbound SMS or call
+-- ---------------------------------------------------------------------------
+
+-- Opt-out registry — checked before every outbound SMS or call
+create table if not exists opt_outs (
+    id          bigserial primary key,
+    phone       text not null unique,
+    source      text not null default 'sms_stop',  -- sms_stop | manual | dnc_import
+    created_at  timestamptz not null default now()
+);
+
+create index if not exists opt_outs_phone_idx on opt_outs (phone);
