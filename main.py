@@ -366,12 +366,9 @@ def _apply_outcome_tags(contact_id: str, outcome: str) -> bool:
 
 def fetch_contact(contact_id: str) -> dict:
     """Fetch a contact from GHL by ID."""
-    r = requests.get(
-        f"{GHL_BASE}/contacts/{contact_id}",
-        headers=GHL_HEADERS,
-        timeout=15,
-    )
-    r.raise_for_status()
+    r = _ghl_get(f"/contacts/{contact_id}")
+    if r is None or r.status_code != 200:
+        raise RuntimeError(f"GHL contact fetch failed for {contact_id}: {r.status_code if r else 'no response'}")
     return r.json().get("contact", {})
 
 
@@ -642,7 +639,7 @@ async def send_sms(agent: str, request: Request):
     try:
         compliance_check(contact_id, ActionType.SMS)
     except ComplianceBlock as e:
-        logging.warning(f"SMS blocked by compliance: {e}")
+        logging.warning("SMS blocked by compliance: %s", e)
         return JSONResponse({"status": "blocked", "reason": str(e)}, status_code=200)
 
     r = _ghl_post(
@@ -815,13 +812,14 @@ async def retell_call_outcome(request: Request):
 
     # ── Send follow-up SMS immediately after call ends ────────────────────────
     from_number = AGENT_PHONE_MAP.get(body.get("agent_id", ""), "")
-    # Compliance gate — must pass before any outbound SMS post-call
+    # Guard: only block follow-up SMS, not the CRM updates above
     try:
-        compliance_check(contact_id, ActionType.CALL)
+        compliance_check(contact_id, ActionType.SMS)
+        sms_sent = _send_followup_sms(contact_id, call_outcome, contact_name, prop_address, from_number)
     except ComplianceBlock as e:
-        logging.warning(f"Call blocked by compliance: {e}")
-        return JSONResponse({"status": "blocked", "reason": str(e)}, status_code=200)
-    sms_sent = _send_followup_sms(contact_id, call_outcome, contact_name, prop_address, from_number)
+        logging.warning("Follow-up SMS blocked by compliance: %s", e)
+        # CRM updates above already completed — just skip the SMS
+        sms_sent = False
 
     # ── MLS track dispatch (Marcus calls only) ────────────────────────────────
     track_dispatched = None
